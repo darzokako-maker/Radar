@@ -9,10 +9,10 @@
 typedef LONG NTSTATUS;
 typedef NTSTATUS(NTAPI* pNtReadVM)(HANDLE, PVOID, PVOID, SIZE_T, PSIZE_T);
 
-[span_2](start_span)// 2026-05-07 Ofsetleri[span_2](end_span)
+// 07.05.2026 Ofsetleri
 namespace Offsets {
-    const uintptr_t dwEntityList = 0x24D0DC0;        [span_3](start_span)//[span_3](end_span)
-    const uintptr_t dwLocalPlayerPawn = 0x2056700;   [span_4](start_span)//[span_4](end_span)
+    const uintptr_t dwEntityList = 0x24D0DC0;        //
+    const uintptr_t dwLocalPlayerPawn = 0x2056700;   //
     const uintptr_t m_vOldOrigin = 0x127C;           
     const uintptr_t m_iHealth = 0x32C;               
 }
@@ -38,10 +38,10 @@ uintptr_t GetModuleBase(DWORD pid, const char* name) {
 std::string get_ui() {
     return "<html><head><style>"
            "body{background:#000;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;overflow:hidden;}"
-           "#radar{width:400px;height:400px;border:2px solid #333;position:relative;background:radial-gradient(circle, #151515 0%, #000 100%);border-radius:50%;}"
+           "#radar{width:400px;height:400px;border:2px solid #444;position:relative;background:radial-gradient(circle, #1a1a1a 0%, #000 100%);border-radius:50%;}"
            ".p{position:absolute;width:8px;height:8px;border-radius:50%;transform:translate(-50%,-50%);}"
-           ".e{background:#ff4444;box-shadow:0 0 8px #f00;}" // Düşman
-           ".l{background:#44aaff;width:12px;height:12px;z-index:10;box-shadow:0 0 12px #0af;}" // Yerel
+           ".e{background:#ff3333;box-shadow:0 0 8px #f00;}" // Düşmanlar Kırmızı
+           ".l{background:#33ccff;width:12px;height:12px;z-index:10;box-shadow:0 0 12px #0af;}" // Sen Mavi
            "</style></head><body><div id='radar'></div>"
            "<script>"
            "function update(){ fetch('/api/radar').then(r=>r.json()).then(data=>{"
@@ -50,7 +50,7 @@ std::string get_ui() {
            "    const d=document.createElement('div'); d.className=p.isLocal?'p l':'p e';"
            "    d.style.left=(p.x/20+200)+'px'; d.style.top=(p.y/-20+200)+'px'; r.appendChild(d);"
            "  });"
-           "}).catch(e=>console.log('Error')); } setInterval(update, 50);"
+           "}).catch(e=>console.log('Radar verisi bekleniyor...')); } setInterval(update, 50);"
            "</script></body></html>";
 }
 
@@ -80,6 +80,7 @@ int APIENTRY WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
         if (RPM(clientBase + Offsets::dwEntityList, &elist, sizeof(elist))) {
             for (int i=1; i<64; i++) {
                 uintptr_t listEntry, pawn;
+                // CS2 Kademeli Adresleme Düzeltmesi (0x10 ve 0x78 yapıları)
                 if (!RPM(elist + 0x10, &listEntry, sizeof(listEntry))) continue;
                 if (!RPM(listEntry + (i * 0x78), &pawn, sizeof(pawn))) continue;
                 if (!pawn || pawn == lpawn) continue;
@@ -102,3 +103,5 @@ int APIENTRY WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
     svr.listen("0.0.0.0", 1337);
     return 0;
 }
+
+
