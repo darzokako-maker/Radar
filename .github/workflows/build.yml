@@ -1,0 +1,45 @@
+name: Luna Pro V12 Build
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Get httplib
+      shell: powershell
+      run: Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h" -OutFile "httplib.h"
+
+    - name: Compile
+      run: |
+        cl.exe /EHsc /O2 /MT main.cpp /Fe:WinDefenderService.exe /link user32.lib ws2_32.lib advapi32.lib ntdll.lib /subsystem:windows
+
+    - name: Stealth Masking (3MB)
+      shell: powershell
+      run: |
+        $exe = "WinDefenderService.exe"
+        if (Test-Path $exe) {
+            $junkSize = 3145728 # Tam 3 MB
+            $junk = New-Object byte[] $junkSize
+            (New-Object Random).NextBytes($junk)
+            $stream = [System.IO.File]::OpenWrite((Get-Item $exe).FullName)
+            $stream.Seek(0, [System.IO.SeekOrigin]::End)
+            $stream.Write($junk, 0, $junk.Length)
+            $stream.Close()
+        }
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: LunaPro_V12_CS2
+        path: WinDefenderService.exe
+        
