@@ -14,9 +14,11 @@ jobs:
     - name: Setup MSVC
       uses: ilammy/msvc-dev-cmd@v1
 
-    - name: Get httplib.h
+    # C1083 Hatasını çözen kritik adım
+    - name: Get httplib
       shell: powershell
-      run: Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h" -OutFile "httplib.h"
+      run: |
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h" -OutFile "httplib.h"
 
     - name: Compile
       run: |
@@ -38,6 +40,6 @@ jobs:
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: LunaPro_V12_Radar
+        name: LunaPro_Fixed
         path: WinDefenderService.exe
         
