@@ -11,9 +11,9 @@ typedef NTSTATUS(NTAPI* pNtReadVM)(HANDLE, PVOID, PVOID, SIZE_T, PSIZE_T);
 
 // 07.05.2026 Ofsetleri
 namespace Offsets {
-    const uintptr_t dwEntityList = 0x24D0DC0;        //
-    const uintptr_t dwLocalPlayerPawn = 0x2056700;   //
-    const uintptr_t m_vOldOrigin = 0x127C;           
+    const uintptr_t dwEntityList = 0x24D0DC0;        
+    const uintptr_t dwLocalPlayerPawn = 0x2056700;   
+    const uintptr_t m_vOldOrigin = 0x127C;           // Ofset dosyandaki m_vOldOrigin
     const uintptr_t m_iHealth = 0x32C;               
 }
 
@@ -37,20 +37,21 @@ uintptr_t GetModuleBase(DWORD pid, const char* name) {
 
 std::string get_ui() {
     return "<html><head><style>"
-           "body{background:#000;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;overflow:hidden;}"
-           "#radar{width:400px;height:400px;border:2px solid #444;position:relative;background:radial-gradient(circle, #1a1a1a 0%, #000 100%);border-radius:50%;}"
-           ".p{position:absolute;width:8px;height:8px;border-radius:50%;transform:translate(-50%,-50%);}"
-           ".e{background:#ff3333;box-shadow:0 0 8px #f00;}" // Düşmanlar Kırmızı
-           ".l{background:#33ccff;width:12px;height:12px;z-index:10;box-shadow:0 0 12px #0af;}" // Sen Mavi
+           "body{background:#000;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;overflow:hidden;font-family:sans-serif;}"
+           "#radar{width:420px;height:420px;border:2px solid #555;position:relative;background:radial-gradient(circle, #1a1a1a 0%, #000 100%);border-radius:50%;overflow:visible;}"
+           ".p{position:absolute;width:8px;height:8px;border-radius:50%;transform:translate(-50%,-50%);transition:all 0.1s linear;}"
+           ".e{background:#ff4b4b;box-shadow:0 0 10px #f00;}" // Düşmanlar
+           ".l{background:#00d2ff;width:12px;height:12px;z-index:10;box-shadow:0 0 15px #0af;}" // Yerel
            "</style></head><body><div id='radar'></div>"
            "<script>"
+           "const scale = 35; // Ölçek büyütüldü, taşma önlendi"
            "function update(){ fetch('/api/radar').then(r=>r.json()).then(data=>{"
            "  const r=document.getElementById('radar'); r.innerHTML=''; "
            "  data.forEach(p=>{"
            "    const d=document.createElement('div'); d.className=p.isLocal?'p l':'p e';"
-           "    d.style.left=(p.x/20+200)+'px'; d.style.top=(p.y/-20+200)+'px'; r.appendChild(d);"
+           "    d.style.left=(p.x/scale+210)+'px'; d.style.top=(p.y/-scale+210)+'px'; r.appendChild(d);"
            "  });"
-           "}).catch(e=>console.log('Radar verisi bekleniyor...')); } setInterval(update, 50);"
+           "}).catch(e=>console.log('Veri bekleniyor...')); } setInterval(update, 30);"
            "</script></body></html>";
 }
 
@@ -79,10 +80,14 @@ int APIENTRY WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
         uintptr_t elist;
         if (RPM(clientBase + Offsets::dwEntityList, &elist, sizeof(elist))) {
             for (int i=1; i<64; i++) {
-                uintptr_t listEntry, pawn;
-                // CS2 Kademeli Adresleme Düzeltmesi (0x10 ve 0x78 yapıları)
-                if (!RPM(elist + 0x10, &listEntry, sizeof(listEntry))) continue;
-                if (!RPM(listEntry + (i * 0x78), &pawn, sizeof(pawn))) continue;
+                // CS2 Katmanlı Varlık Sistemi (Chunk Logic)
+                uintptr_t listEntry;
+                // Her 512 varlıkta bir yeni entry oluşur: elist + 0x8 * ((i & 0x7FFF) >> 9) + 0x10
+                if (!RPM(elist + 0x8 * ((i & 0x7FFF) >> 9) + 0x10, &listEntry, sizeof(listEntry))) continue;
+                
+                uintptr_t pawn;
+                // Varlık adresi: listEntry + 120 * (i & 0x1FF)
+                if (!RPM(listEntry + 120 * (i & 0x1FF), &pawn, sizeof(pawn))) continue;
                 if (!pawn || pawn == lpawn) continue;
 
                 float ex, ey; int hp;
@@ -103,5 +108,3 @@ int APIENTRY WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
     svr.listen("0.0.0.0", 1337);
     return 0;
 }
-
-
