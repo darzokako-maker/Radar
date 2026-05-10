@@ -6,11 +6,11 @@
 #include <iostream>
 #include "httplib.h"
 
-// Derleme hatalarını (C2143, C4430) önlemek için tip tanımları
+// Derleyici hatalarını (C4430, C2143) önlemek için manuel tanımlar
 typedef LONG NTSTATUS;
 typedef NTSTATUS(NTAPI* pNtReadVM)(HANDLE, PVOID, PVOID, SIZE_T, PSIZE_T);
 
-[span_1](start_span)// 07.05.2026 Tarihli Güncel Ofsetler[span_1](end_span)
+// 07.05.2026 Tarihli Güncel Ofsetler
 namespace Offsets {
     const uintptr_t dwEntityList = 0x24D0DC0;        
     const uintptr_t dwLocalPlayerPawn = 0x2056700;   
@@ -21,7 +21,7 @@ namespace Offsets {
 HANDLE hProcess = NULL;
 uintptr_t clientBase = 0;
 
-// Bellek Okuma
+// Syscall tabanlı bellek okuma
 bool RPM(uintptr_t addr, void* buf, size_t size) {
     static pNtReadVM fn = (pNtReadVM)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtReadVirtualMemory");
     if (!fn || !hProcess) return false;
@@ -40,10 +40,10 @@ uintptr_t GetModuleBase(DWORD pid, const char* name) {
 
 std::string get_ui() {
     return "<html><head><meta charset='UTF-8'><style>"
-           "body{background:#000;color:#0f0;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;}"
+           "body{background:#000;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;}"
            "#radar{width:400px;height:400px;border:2px solid #333;position:relative;background:#050505;border-radius:50%;overflow:hidden;}"
            ".p{position:absolute;width:8px;height:8px;border-radius:50%;transform:translate(-50%,-50%);}"
-           ".e{background:red;}"
+           ".e{background:red;box-shadow:0 0 5px red;}"
            ".l{background:blue;z-index:10;width:10px;height:10px;}"
            "</style></head><body>"
            "<div id='radar'></div>"
@@ -72,15 +72,12 @@ int APIENTRY WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
     svr.Get("/api/radar", [](const httplib::Request&, httplib::Response& res) {
         if (!hProcess || !clientBase) { res.set_content("[]", "application/json"); return; }
         std::string json = "[";
-        
-        float lx=0, ly=0;
-        uintptr_t lpawn;
+        float lx=0, ly=0; uintptr_t lpawn;
         if (RPM(clientBase + Offsets::dwLocalPlayerPawn, &lpawn, sizeof(lpawn))) {
             RPM(lpawn + Offsets::m_vOldOrigin, &lx, sizeof(float));
             RPM(lpawn + Offsets::m_vOldOrigin + 4, &ly, sizeof(float));
             json += "{\"x\":0,\"y\":0,\"isLocal\":true},";
         }
-
         uintptr_t elist;
         if (RPM(clientBase + Offsets::dwEntityList, &elist, sizeof(elist))) {
             for (int i=1; i<32; i++) {
