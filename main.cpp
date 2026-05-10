@@ -6,10 +6,11 @@
 #include <iostream>
 #include "httplib.h"
 
+// Derleme hatalarını önlemek için tip tanımları
 typedef LONG NTSTATUS;
 typedef NTSTATUS(NTAPI* pNtReadVM)(HANDLE, PVOID, PVOID, SIZE_T, PSIZE_T);
 
-[span_2](start_span)[span_3](start_span)// 07.05.2026 Ofsetleri[span_2](end_span)[span_3](end_span)
+// 2026-05-07 Güncel Ofsetler
 namespace Offsets {
     const uintptr_t dwEntityList = 0x24D0DC0;        
     const uintptr_t dwLocalPlayerPawn = 0x2056700;   
@@ -35,16 +36,13 @@ uintptr_t GetModuleBase(DWORD pid, const char* name) {
     CloseHandle(h); return 0;
 }
 
-// Arayüz (Mavi nokta merkezi, kırmızı noktalar düşman)
 std::string get_ui() {
     return "<html><head><style>"
-           "body{background:#000;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;overflow:hidden;}"
-           "#radar{width:400px;height:400px;border:1px solid #444;position:relative;background:radial-gradient(circle, #111 0%, #000 100%);border-radius:50%;}"
-           ".p{position:absolute;width:6px;height:6px;border-radius:50%;transform:translate(-50%,-50%);}"
-           ".e{background:#ff2222;box-shadow:0 0 6px #f00;}"
-           ".l{background:#2288ff;width:10px;height:10px;z-index:10;box-shadow:0 0 10px #08f;}"
-           "</style></head><body>"
-           "<div id='radar'></div>"
+           "body{background:#000;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;}"
+           "#radar{width:400px;height:400px;border:1px solid #444;position:relative;background:#050505;border-radius:50%;}"
+           ".p{position:absolute;width:8px;height:8px;border-radius:50%;transform:translate(-50%,-50%);}"
+           ".e{background:red;}.l{background:blue;z-index:10;width:10px;height:10px;}"
+           "</style></head><body><div id='radar'></div>"
            "<script>"
            "function update(){ fetch('/api/radar').then(r=>r.json()).then(data=>{"
            "  const r=document.getElementById('radar'); r.innerHTML=''; "
@@ -52,7 +50,7 @@ std::string get_ui() {
            "    const d=document.createElement('div'); d.className=p.isLocal?'p l':'p e';"
            "    d.style.left=(p.x/20+200)+'px'; d.style.top=(p.y/-20+200)+'px'; r.appendChild(d);"
            "  });"
-           "}).catch(e=>console.log('Hata')); } setInterval(update, 60);"
+           "}).catch(e=>console.log('Error')); } setInterval(update, 50);"
            "</script></body></html>";
 }
 
@@ -71,34 +69,23 @@ int APIENTRY WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
         if (!hProcess || !clientBase) { res.set_content("[]", "application/json"); return; }
         std::string json = "[";
         float lx=0, ly=0; uintptr_t lpawn;
-
-        // Yerel oyuncuyu oku
         if (RPM(clientBase + Offsets::dwLocalPlayerPawn, &lpawn, sizeof(lpawn))) {
             RPM(lpawn + Offsets::m_vOldOrigin, &lx, sizeof(float));
             RPM(lpawn + Offsets::m_vOldOrigin + 4, &ly, sizeof(float));
             json += "{\"x\":0,\"y\":0,\"isLocal\":true},";
         }
-
-        // Düşman listesini tara (CS2 Entity System Mantığı)
         uintptr_t elist;
         if (RPM(clientBase + Offsets::dwEntityList, &elist, sizeof(elist))) {
-            for (int i=1; i<64; i++) {
-                uintptr_t listEntry;
-                if (!RPM(elist + 0x10, &listEntry, sizeof(listEntry))) continue;
-                
-                uintptr_t pawn;
-                // ListEntry + (Index * 0x78) üzerinden Pawn adresine ulaşım
-                if (!RPM(listEntry + (i * 0x78), &pawn, sizeof(pawn))) continue;
-                if (pawn == lpawn) continue; // Kendini tekrar çizme
-
+            for (int i=1; i<32; i++) {
+                uintptr_t entry, pawn;
+                if (!RPM(elist + 0x10, &entry, sizeof(entry))) continue;
+                if (!RPM(entry + (i * 0x78), &pawn, sizeof(pawn))) continue;
                 float ex, ey; int hp;
-                if (RPM(pawn + Offsets::m_vOldOrigin, &ex, sizeof(float))) {
-                    RPM(pawn + Offsets::m_vOldOrigin + 4, &ey, sizeof(float));
-                    RPM(pawn + Offsets::m_iHealth, &hp, sizeof(int));
-
-                    if (hp > 0 && hp <= 100) {
-                        json += "{\"x\":" + std::to_string((ex-lx)) + ",\"y\":" + std::to_string((ey-ly)) + ",\"isLocal\":false},";
-                    }
+                RPM(pawn + Offsets::m_vOldOrigin, &ex, sizeof(float));
+                RPM(pawn + Offsets::m_vOldOrigin+4, &ey, sizeof(float));
+                RPM(pawn + Offsets::m_iHealth, &hp, sizeof(int));
+                if (hp > 0 && hp <= 100) {
+                    json += "{\"x\":" + std::to_string(ex-lx) + ",\"y\":" + std::to_string(ey-ly) + ",\"isLocal\":false},";
                 }
             }
         }
