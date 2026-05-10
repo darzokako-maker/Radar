@@ -3,30 +3,30 @@
 #include <tlhelp32.h>
 #include <vector>
 #include <string>
+#include <sstream>
 #include "httplib.h"
 
-// Derleme hatalarını önlemek için manuel tanımlamalar
+// Derleme hatalarını önlemek için manuel tip tanımları
 typedef LONG NTSTATUS;
-#define STATUS_SUCCESS ((NTSTATUS)0x00000000L)
-
 typedef NTSTATUS(NTAPI* pNtReadVM)(HANDLE, PVOID, PVOID, SIZE_T, PSIZE_T);
-typedef NTSTATUS(NTAPI* pNtWriteVM)(HANDLE, PVOID, PVOID, SIZE_T, PSIZE_T);
 
-// 2026-05-07 Tarihli Güncel Ofsetler
+// 07.05.2026 Tarihli Güncel Ofsetler
 namespace Offsets {
-    const uintptr_t dwEntityList = 0x24D0DC0;        //
-    const uintptr_t dwLocalPlayerController = 0x230A4F0; //
-    const uintptr_t m_iHealth = 0x32C;               
+    const uintptr_t dwEntityList = 0x24D0DC0;        
+    const uintptr_t dwLocalPlayerPawn = 0x2056700;   
     const uintptr_t m_vOldOrigin = 0x127C;           
+    const uintptr_t m_iTeamNum = 0x3C3;              
+    const uintptr_t m_iHealth = 0x32C;               
 }
 
 HANDLE hProcess = NULL;
 uintptr_t clientBase = 0;
 
-// Syscall Fonksiyonları
-NTSTATUS SyscallRead(PVOID base, PVOID buf, SIZE_T size) {
+// Düşük seviyeli bellek okuma fonksiyonu
+bool RPM(uintptr_t addr, void* buffer, size_t size) {
     static pNtReadVM fn = (pNtReadVM)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtReadVirtualMemory");
-    return (fn) ? fn(hProcess, base, buf, size, NULL) : (NTSTATUS)0xC0000001L;
+    if (!fn || !hProcess) return false;
+    return fn(hProcess, (PVOID)addr, buffer, size, NULL) == 0;
 }
 
 uintptr_t GetModuleBase(DWORD pid, const char* name) {
@@ -39,6 +39,29 @@ uintptr_t GetModuleBase(DWORD pid, const char* name) {
     CloseHandle(h); return 0;
 }
 
+std::string get_ui() {
+    return "<html><head><meta charset='UTF-8'><style>"
+           "body{background:#000;color:#0f0;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;}"
+           "#radar{width:400px;height:400px;border:2px solid #333;position:relative;background:rgba(0,30,0,0.3);border-radius:50%;overflow:hidden;}"
+           ".point{position:absolute;width:8px;height:8px;border-radius:50%;transform:translate(-50%,-50%);}"
+           ".enemy{background:#ff4d4d;box-shadow:0 0 5px #f00;}"
+           ".local{background:#4d79ff;width:10px;height:10px;z-index:10;box-shadow:0 0 8px #00f;}"
+           ".cross{position:absolute;top:50%;left:50%;width:100%;height:1px;background:#222;} .v{width:1px;height:100%;}"
+           "</style></head><body>"
+           "<div id='radar'><div class='cross'></div><div class='cross v'></div></div>"
+           "<script>"
+           "function update(){ fetch('/api/radar').then(r=>r.json()).then(data=>{"
+           "  const r=document.getElementById('radar'); "
+           "  r.querySelectorAll('.point').forEach(e=>e.remove()); "
+           "  data.forEach(p=>{"
+           "    const d=document.createElement('div'); d.className=p.isLocal?'point local':'point enemy';"
+           "    d.style.left=(p.x / 15 + 200)+'px'; d.style.top=(p.y / -15 + 200)+'px';" 
+           "    r.appendChild(d);"
+           "  });"
+           "}).catch(e=>console.log('Hata')); } setInterval(update, 50);"
+           "</script></body></html>";
+}
+
 int APIENTRY WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
     httplib::Server svr;
 
@@ -47,18 +70,51 @@ int APIENTRY WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
         if (hProcess) CloseHandle(hProcess);
         hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
         clientBase = GetModuleBase(pid, "client.dll");
-        res.set_content(clientBase ? "Baglandi" : "Modul Bulunamadi", "text/plain");
+        res.set_content(clientBase ? "Baglandi" : "Hata", "text/plain");
     });
 
     svr.Get("/api/radar", [](const httplib::Request&, httplib::Response& res) {
-        // Radar mantığı burada çalışacak
-        res.set_content("[]", "application/json");
+        if (!hProcess || !clientBase) { res.set_content("[]", "application/json"); return; }
+        
+        std::stringstream json; json << "[";
+        
+        // 1. Local Player Konumu
+        uintptr_t localPawn;
+        float localX = 0, localY = 0;
+        if (RPM(clientBase + Offsets::dwLocalPlayerPawn, &localPawn, sizeof(localPawn))) {
+            RPM(localPawn + Offsets::m_vOldOrigin, &localX, sizeof(float));
+            RPM(localPawn + Offsets::m_vOldOrigin + 4, &localY, sizeof(float));
+            json << "{\"x\":0,\"y\":0,\"isLocal\":true},"; // Kendini merkeze al
+        }
+
+        // 2. Düşmanları Tara (Basitleştirilmiş döngü)
+        uintptr_t entityList;
+        if (RPM(clientBase + Offsets::dwEntityList, &entityList, sizeof(entityList))) {
+            for (int i = 1; i < 32; i++) {
+                uintptr_t listEntry;
+                if (!RPM(entityList + ((i & 0x7FFF) >> 9) * 8 + 16, &listEntry, sizeof(listEntry))) continue;
+                uintptr_t playerPawn;
+                if (!RPM(listEntry + 120 * (i & 0x1FF), &playerPawn, sizeof(playerPawn))) continue;
+
+                float ex, ey;
+                int hp;
+                RPM(playerPawn + Offsets::m_vOldOrigin, &ex, sizeof(float));
+                RPM(playerPawn + Offsets::m_vOldOrigin + 4, &ey, sizeof(float));
+                RPM(playerPawn + Offsets::m_iHealth, &hp, sizeof(int));
+
+                if (hp > 0 && hp <= 100) {
+                    // Kendi konumuna göre olan farkı hesapla
+                    json << "{\"x\":" << (ex - localX) << ",\"y\":" << (ey - localY) << ",\"isLocal\":false},";
+                }
+            }
+        }
+
+        std::string out = json.str();
+        if (out.back() == ',') out.pop_back();
+        res.set_content(out + "]", "application/json");
     });
 
-    svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
-        res.set_content("<html><body><h2>Luna V12 Radar Aktif</h2></body></html>", "text/html");
-    });
-
+    svr.Get("/", [](const httplib::Request&, httplib::Response& res) { res.set_content(get_ui(), "text/html"); });
     svr.listen("0.0.0.0", 1337);
     return 0;
 }
