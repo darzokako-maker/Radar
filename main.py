@@ -3,7 +3,6 @@ import ctypes
 import struct
 import json
 import websockets
-import os
 import http.server
 import socketserver
 import threading
@@ -185,21 +184,72 @@ async def network_broadcast(websocket):
     except websockets.exceptions.ConnectionClosed:
         pass
 
-# --- Tarayıcı İçin HTTP Sunucusu (Port 80) ---
-def start_http_server():
-    class QuietHandler(http.server.SimpleHTTPRequestHandler):
-        def log_message(self, format, *args):
-            return # Terminali çöp loglarla doldurmaması için logları gizle
+# --- PYTHON İÇİNE GÖMÜLÜ RADAR ARAYÜZÜ (HTML/JS) ---
+RADAR_HTML = """<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CS2 Mobil Web Radar</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background-color: #11141a; color: #ffffff; font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; overflow: hidden; }
+        #radar-container { position: relative; background: radial-gradient(circle, #1a1f29 0%, #0d1017 100%); border: 2px solid #2a3447; border-radius: 50%; box-shadow: 0 0 30px rgba(0,0,0,0.6); }
+        canvas { display: block; border-radius: 50%; }
+        #status-panel { margin-top: 15px; font-size: 14px; color: #8fa0bc; }
+        .online { color: #4caf50; font-weight: bold; }
+        .offline { color: #f44336; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="radar-container"><canvas id="radarCanvas" width="500" height="500"></canvas></div>
+    <div id="status-panel">Sistem Durumu: <span id="status" class="offline">BAĞLANTI YOK</span></div>
+    <script>
+        const canvas = document.getElementById('radarCanvas'); const ctx = canvas.getContext('2d'); const statusEl = document.getElementById('status');
+        const centerX = canvas.width / 2; const centerY = canvas.height / 2; const radarScale = 0.14;
+        const socket = new WebSocket(`ws://${window.location.hostname}:8080`);
+        socket.onopen = () => { statusEl.innerText = "AKTİF (SENKRONİZE)"; statusEl.className = "online"; };
+        socket.onclose = () => { statusEl.innerText = "BAĞLANTI KESİLDİ"; statusEl.className = "offline"; };
+        socket.onmessage = (event) => { drawRadar(JSON.parse(event.data)); };
+        function drawRadar(players) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); drawRadarGrid();
+            players.forEach(player => {
+                const screenX = centerX + (player.pos_x * radarScale); const screenY = centerY - (player.pos_y * radarScale);
+                if (Math.sqrt(Math.pow(screenX - centerX, 2) + Math.pow(screenY - centerY, 2)) > canvas.width / 2 - 12) return;
+                ctx.beginPath(); ctx.arc(screenX, screenY, 6, 0, 2 * Math.PI);
+                if (player.is_enemy) { ctx.fillStyle = '#ff3333'; ctx.strokeStyle = 'rgba(255, 51, 51, 0.35)'; ctx.lineWidth = 4; ctx.stroke(); }
+                else { ctx.fillStyle = player.team === 'CT' ? '#3399ff' : '#ff9933'; }
+                ctx.fill(); ctx.fillStyle = '#ffffff'; ctx.font = 'bold 10px sans-serif'; ctx.fillText(`HP:${player.health}`, screenX - 12, screenY - 11);
+            });
+            ctx.beginPath(); ctx.arc(centerX, centerY, 7, 0, 2 * Math.PI); ctx.fillStyle = '#00ffcc'; ctx.fill();
+        }
+        function drawRadarGrid() {
+            ctx.strokeStyle = 'rgba(143, 160, 188, 0.08)'; ctx.lineWidth = 1;
+            for (let r = 50; r < canvas.width / 2; r += 50) { ctx.beginPath(); ctx.arc(centerX, centerY, r, 0, 2 * Math.PI); ctx.stroke(); }
+            ctx.beginPath(); ctx.moveTo(centerX, 0); ctx.lineTo(centerX, canvas.height); ctx.moveTo(0, centerY); ctx.lineTo(canvas.width, centerY); ctx.stroke();
+        }
+    </script>
+</body>
+</html>"""
 
-    PORT = 80 # Standart web portu (Tarayıcıya port yazmayı engeller)
-    handler = QuietHandler
-    with socketserver.TCPServer(("0.0.0.0", PORT), handler) as httpd:
+# --- Gelişmiş Gömülü Bellek Sunucusu ---
+def start_http_server():
+    class EmbeddedRadarHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            # Tarayıcı her istek attığında hafızadaki HTML kodunu gönder
+            self.send_response(200)
+            self.send_header("Content-type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(RADAR_HTML.encode("utf-8"))
+        def log_message(self, format, *args):
+            return # Terminali temiz tut, log basma
+
+    PORT = 8085
+    with socketserver.TCPServer(("0.0.0.0", PORT), EmbeddedRadarHandler) as httpd:
         httpd.serve_forever()
 
 async def main():
-    # Web sunucusunu arka plan kanalında (Thread) başlatıyoruz
     threading.Thread(target=start_http_server, daemon=True).start()
-    # WebSocket sunucusunu çalıştırıyoruz
     async with websockets.serve(network_broadcast, "0.0.0.0", 8080):
         await asyncio.Future()
 
@@ -208,4 +258,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         if engine: engine.close()
-            
+                        
