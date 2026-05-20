@@ -3,6 +3,10 @@ import ctypes
 import struct
 import json
 import websockets
+import os
+import http.server
+import socketserver
+import threading
 
 # --- Windows Çekirdek API Ayarları ---
 PROCESS_VM_READ = 0x0010
@@ -70,21 +74,30 @@ class CS2CoreEngine:
         return exit_code.value == 259
 
     def read_raw(self, address, size):
-        if not self.process_handle or address <= 0: return b'\x00' * size
+        if not self.process_handle or address <= 0: 
+            return b'\x00' * size
         buf = ctypes.create_string_buffer(size)
         read = ctypes.c_size_t()
         if ctypes.windll.kernel32.ReadProcessMemory(self.process_handle, address, buf, size, ctypes.byref(read)):
-            return buf.raw
+            if read.value == size:
+                return buf.raw
         return b'\x00' * size
 
     def read_int(self, address):
-        return struct.unpack('<i', self.read_raw(address, 4))[0]
+        raw = self.read_raw(address, 4)
+        if len(raw) < 4: return 0
+        return struct.unpack('<i', raw)[0]
 
     def read_uint64(self, address):
-        return struct.unpack('<Q', self.read_raw(address, 8))[0]
+        raw = self.read_raw(address, 8)
+        if len(raw) < 8: return 0
+        return struct.unpack('<Q', raw)[0]
 
     def read_vec3(self, address):
-        return struct.unpack('<fff', self.read_raw(address, 12))
+        raw = self.read_raw(address, 12)
+        if len(raw) < 12: 
+            return (0.0, 0.0, 0.0)
+        return struct.unpack('<fff', raw)
         
     def close(self):
         if self.process_handle:
@@ -95,12 +108,8 @@ engine = None
 
 async def network_broadcast(websocket):
     global engine
-    
-    # 2026-05-19 Güncel Statik Adresleri
     dwLocalPlayerPawn = 0x2090880
     dwEntityList = 0x250C5B0
-    
-    # İç Şema Bilgileri (Offset)
     m_iHealth = 0x334
     m_iTeamNum = 0x3CF
     m_vOldOrigin = 0xCD8
@@ -117,20 +126,16 @@ async def network_broadcast(websocket):
                     continue
 
             synchronized_players = []
-            
             try:
                 entity_list = engine.read_uint64(engine.client_base + dwEntityList)
                 local_pawn = engine.read_uint64(engine.client_base + dwLocalPlayerPawn)
                 
-                # Yerel Oyuncunun Harita ve Canlılık Validasyonu
                 if local_pawn > 0:
                     local_hp = engine.read_int(local_pawn + m_iHealth)
-                    
                     if local_hp <= 0 or local_hp > 100:
                         await websocket.send(json.dumps([]))
                         await asyncio.sleep(0.1)
                         continue
-                        
                     local_team = engine.read_int(local_pawn + m_iTeamNum)
                 else:
                     await websocket.send(json.dumps([]))
@@ -139,7 +144,6 @@ async def network_broadcast(websocket):
 
                 if entity_list:
                     for idx in range(1, 64):
-                        # 1. Aşama: Controller Hücresine Bağlanma
                         list_entry = engine.read_uint64(entity_list + ((8 * (idx & 0x7FFF)) >> 9) + 16)
                         if not list_entry: continue
                         
@@ -149,14 +153,10 @@ async def network_broadcast(websocket):
                         pawn_handle = engine.read_int(controller + m_hPlayerPawn)
                         if not pawn_handle: continue
                         
-                        # --- Senkronize Edilmiş Çift Katmanlı İndeks Algoritması ---
                         pawn_idx = pawn_handle & 0x7FFF
-                        
-                        # Genel temel indeks üzerinden katman bloğunu buluyoruz
                         list_entry_pawn = engine.read_uint64(entity_list + ((8 * pawn_idx) >> 9) + 16)
                         if not list_entry_pawn: continue
                         
-                        # Aynı indeks köküne alt 9 bit (0x1FF) maskelemesi ile spesifik hücreyi çözüyoruz
                         pawn_ptr = engine.read_uint64(list_entry_pawn + 120 * (pawn_idx & 0x1FF))
                         if not pawn_ptr or pawn_ptr == local_pawn: continue
 
@@ -165,6 +165,8 @@ async def network_broadcast(websocket):
                         
                         team = engine.read_int(pawn_ptr + m_iTeamNum)
                         x, y, z = engine.read_vec3(pawn_ptr + m_vOldOrigin)
+
+                        if x == 0.0 and y == 0.0: continue
 
                         synchronized_players.append({
                             "index": idx,
@@ -178,14 +180,26 @@ async def network_broadcast(websocket):
             except Exception:
                 pass
 
-            # JSON Serileştirme ile Ağ Yayını
             await websocket.send(json.dumps(synchronized_players))
-            await asyncio.sleep(0.016) # 60 FPS Kararlılık Aralığı
-            
+            await asyncio.sleep(0.016)
     except websockets.exceptions.ConnectionClosed:
         pass
 
+# --- Tarayıcı İçin HTTP Sunucusu (Port 80) ---
+def start_http_server():
+    class QuietHandler(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, format, *args):
+            return # Terminali çöp loglarla doldurmaması için logları gizle
+
+    PORT = 80 # Standart web portu (Tarayıcıya port yazmayı engeller)
+    handler = QuietHandler
+    with socketserver.TCPServer(("0.0.0.0", PORT), handler) as httpd:
+        httpd.serve_forever()
+
 async def main():
+    # Web sunucusunu arka plan kanalında (Thread) başlatıyoruz
+    threading.Thread(target=start_http_server, daemon=True).start()
+    # WebSocket sunucusunu çalıştırıyoruz
     async with websockets.serve(network_broadcast, "0.0.0.0", 8080):
         await asyncio.Future()
 
@@ -193,6 +207,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        if engine:
-            engine.close()
-      
+        if engine: engine.close()
+            
