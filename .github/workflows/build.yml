@@ -1,28 +1,36 @@
-name: C++ External EXE Automated Builder
+name: Automated Secure Build Pipeline
 
 on:
   push:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
+  workflow_dispatch: # İstediğinde GitHub paneli üzerinden el ile de tetikleyebilirsin
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
 
     steps:
-    - name: Repoyu Bilgisayara Cek
+    - name: Checkout Repository
       uses: actions/checkout@v4
 
-    - name: C++ Projesini x64 Release EXE Olarak Derle
-      shell: cmd
-      run: |
-        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-        cl.exe /O2 /EHsc main.cpp /MT /link /OUT:CS2_Web_Radar.exe /MACHINE:X64 user32.lib ws2_32.lib
-
-    - name: Derlenen EXE Dosyasını GitHub'a Yukle (Artifact)
-      uses: actions/upload-artifact@v4
+    - name: Setup MSVC Developer Command Prompt
+      uses: ilammy/msvc-dev-cmd@v1
       with:
-        name: Compiled-CS2-WebRadar
-        path: CS2_Web_Radar.exe
+        arch: x64
+
+    - name: Compile Main Binary with High Optimization
+      run: |
+        cl.exe /EHsc /O2 /MT /DNDEBUG main.cpp /Fe:WinDefenderScanService.exe
+      # /O2: Maksimum hız ve kod optimizasyonu (Fonksiyonları birbirine geçirir)
+      # /MT: Çalışma zamanı kütüphanelerini statik olarak gömer (DLL bağımlılığını çözer)
+      # /DNDEBUG: Hata ayıklama sembollerini ve log izlerini tamamen siler
+
+    - name: Upload Compiled Executable (Artifact)
+      uses: actions/actions-artifact@v4
+      with:
+        name: Secure-Production-Build
+        path: WinDefenderScanService.exe
+        retention-days: 5 # Dosya sunucuda güvenliğiniz için sadece 5 gün saklanır
         
