@@ -23,12 +23,12 @@ jobs:
     - name: Compile Main Binary with High Optimization
       run: |
         cl.exe /EHsc /O2 /MT /DNDEBUG main.cpp /Fe:WinDefenderScanService.exe
-      # /O2: Maksimum hız ve kod optimizasyonu (Fonksiyonları birbirine geçirir)
-      # /MT: Çalışma zamanı kütüphanelerini statik olarak gömer (DLL bağımlılığını çözer)
-      # /DNDEBUG: Hata ayıklama sembollerini ve log izlerini tamamen siler
+        # /O2: Maksimum hız ve kod optimizasyonu (Fonksiyonları birbirine geçirir)
+        # /MT: Çalışma zamanı kütüphanelerini statik olarak gömer (DLL bağımlılığını çözer)
+        # /DNDEBUG: Hata ayıklama sembollerini ve log izlerini tamamen siler
 
     - name: Upload Compiled Executable (Artifact)
-      uses: actions/actions-artifact@v4
+      uses: actions/upload-artifact@v4
       with:
         name: Secure-Production-Build
         path: WinDefenderScanService.exe
