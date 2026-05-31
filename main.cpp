@@ -7,7 +7,7 @@
 #include <sstream>
 
 // =========================================================================
-// YÜKLEDİĞİNİZ OFSETLER & ŞEMALAR (Doğrudan Hafıza Okuma İçin)
+// YÜKLEDİĞİNİZ OFSETLER & ŞEMALAR
 // =========================================================================
 namespace cs2_dumper {
     namespace offsets {
@@ -51,7 +51,7 @@ DWORD WINAPI WebServerThread(LPVOID lpParam) {
     }
 
     SOCKET serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    sockaddr_address;
+    
     sockaddr_in serverAddr{};
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -66,7 +66,7 @@ DWORD WINAPI WebServerThread(LPVOID lpParam) {
             char buffer[1024];
             recv(clientSocket, buffer, sizeof(buffer), 0);
 
-            // Tarayıcı veri istediğinde JSON formatında oyuncu koordinatlarını dönüyoruz
+            // JSON formatında oyuncu koordinatlarını dönüyoruz
             std::ostringstream json;
             json << "[\n";
             for (size_t i = 0; i < g_Players.size(); ++i) {
@@ -84,7 +84,7 @@ DWORD WINAPI WebServerThread(LPVOID lpParam) {
             std::ostringstream response;
             response << "HTTP/1.1 200 OK\r\n"
                      << "Content-Type: application/json\r\n"
-                     << "Access-Control-Allow-Origin: *\r\n" // Tarayıcı güvenlik engelini aşma (CORS)
+                     << "Access-Control-Allow-Origin: *\r\n"
                      << "Content-Length: " << body.length() << "\r\n"
                      << "Connection: close\r\n\r\n"
                      << body;
@@ -102,7 +102,6 @@ DWORD WINAPI WebServerThread(LPVOID lpParam) {
 bool InitializeSystem() {
     g_Status = "cs2.exe bekleniyor...";
     
-    // 1. Süreç Bulma
     HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     PROCESSENTRY32 pe32{ sizeof(PROCESSENTRY32) };
     if (Process32First(hSnapshot, &pe32)) {
@@ -117,14 +116,12 @@ bool InitializeSystem() {
 
     if (!g_PID) return false;
 
-    // 2. Süreç Açma Yetki Kontrolü
     g_hProcess = OpenProcess(PROCESS_VM_READ, FALSE, g_PID);
     if (!g_hProcess) {
-        g_Status = "HATA: Oyun bulundu ama bellek okuma yetkisi alinamadi (Yonetici olarak calistirin)!";
+        g_Status = "HATA: Oyun bulundu ama bellek okuma yetkisi alinamadi (Yonetici calistirin)!";
         return false;
     }
 
-    // 3. Modül Doğrulama
     HANDLE hModSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, g_PID);
     MODULEENTRY32 me32{ sizeof(MODULEENTRY32) };
     if (Module32First(hModSnapshot, &me32)) {
@@ -166,7 +163,7 @@ int main() {
         if (!ReadProcessMemory(g_hProcess, (LPCVOID)(g_ClientModule + cs2_dumper::offsets::client_dll::dwEntityList), &entityList, sizeof(entityList), nullptr) || !entityList) {
             g_Status = "HATA: EntityList okunamadi! Ofsetler eski olabilir.";
             std::cout << "\r[HATA] " << g_Status << std::flush;
-            g_hProcess = NULL; // Bağlantıyı sıfırla, yeniden dene
+            g_hProcess = NULL; 
             Sleep(1000);
             continue;
         }
