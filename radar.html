@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CS2 Web Radar Ekranı</title>
+    <style>
+        body { background: #111; color: white; font-family: sans-serif; text-align: center; }
+        #radar { width: 500px; height: 500px; background: #222; border: 2px solid #444; position: relative; margin: 20px auto; border-radius: 50%; }
+        .player { position: absolute; width: 12px; height: 12px; border-radius: 50%; transform: translate(-50%, -50%); font-size: 10px; font-weight: bold; }
+        .t { background: red; box-shadow: 0 0 8px red; }
+        .ct { background: #00bfff; box-shadow: 0 0 8px #00bfff; }
+        .name { color: #ccc; margin-top: -15px; display: block; white-space: nowrap; }
+    </style>
+</head>
+<body>
+    <h1>CS2 CANLI WEB RADAR</h1>
+    <div id="radar"></div>
+
+    <script>
+        setInterval(async () => {
+            try {
+                let res = await fetch('http://localhost:8080');
+                let players = await res.json();
+                let radar = document.getElementById('radar');
+                radar.innerHTML = ''; // Ekranı temizle
+
+                players.forEach(p => {
+                    let dot = document.createElement('div');
+                    dot.className = 'player ' + (p.team === 2 ? 't' : 'ct');
+                    
+                    // Koordinatları harita merkezine ölçekleme (CS2 harita boyutuna göre ayarlanabilir)
+                    let mapX = 250 + (p.x / 15);
+                    let mapY = 250 - (p.y / 15);
+
+                    dot.style.left = mapX + 'px';
+                    dot.style.top = mapY + 'px';
+                    dot.innerHTML = `<span class="name">${p.name} (${p.health})</span>`;
+                    radar.appendChild(dot);
+                });
+            } catch(e) {
+                // Sunucu kapalıysa veya veri gelmiyorsa hata ayıklama sessizce bekler
+            }
+        }, 100);
+    </script>
+</body>
+</html>
+
