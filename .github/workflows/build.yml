@@ -22,7 +22,7 @@ jobs:
         cl.exe /O2 /D_USRDLL /D_WINDLL main.cpp /MT /link /DLL /OUT:CS2_Advanced_Radar.dll /MACHINE:X64 user32.lib
 
     - name: Derlenen DLL Dosyasını GitHub'a Yukle (Artifact)
-      uses: actions/actions-artifact@v4
+      uses: actions/upload-artifact@v4
       with:
         name: Compiled-CS2-Radar
         path: CS2_Advanced_Radar.dll
