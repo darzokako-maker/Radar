@@ -1,4 +1,4 @@
-name: C++ DLL Automated Builder
+name: C++ External EXE Automated Builder
 
 on:
   push:
@@ -14,15 +14,15 @@ jobs:
     - name: Repoyu Bilgisayara Cek
       uses: actions/checkout@v4
 
-    - name: C++ Projesini x64 Release Olarak Derle
+    - name: C++ Projesini x64 Release EXE Olarak Derle
       shell: cmd
       run: |
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-        cl.exe /O2 /D_USRDLL /D_WINDLL main.cpp /MT /link /DLL /OUT:CS2_Advanced_Radar.dll /MACHINE:X64 user32.lib
+        cl.exe /O2 /EHsc main.cpp /MT /link /OUT:CS2_Web_Radar.exe /MACHINE:X64 user32.lib ws2_32.lib
 
-    - name: Derlenen DLL Dosyasını GitHub'a Yukle (Artifact)
+    - name: Derlenen EXE Dosyasını GitHub'a Yukle (Artifact)
       uses: actions/upload-artifact@v4
       with:
-        name: Compiled-CS2-Radar
-        path: CS2_Advanced_Radar.dll
+        name: Compiled-CS2-WebRadar
+        path: CS2_Web_Radar.exe
         
