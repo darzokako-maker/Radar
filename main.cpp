@@ -5,16 +5,15 @@
 #include <vector>
 #include <cmath>
 #include <sstream>
-#include <mutex> // Race Condition çözümü için eklendi
+#include <mutex>
 
 // =========================================================================
-// YÜKLEDİĞİNİZ OFSETLER & ŞEMALAR
+// GÜNCEL KESİN OFSETLER & ŞEMALAR
 // =========================================================================
 namespace cs2_dumper {
     namespace offsets {
         namespace client_dll {
             constexpr std::ptrdiff_t dwEntityList = 0x24E5590;
-            constexpr std::ptrdiff_t dwLocalPlayerPawn = 0x233F698;
         }
     }
 }
@@ -24,7 +23,7 @@ namespace schemas {
         constexpr std::ptrdiff_t m_iTeamNum = 0x3E3;
         constexpr std::ptrdiff_t m_vOldOrigin = 0x1324;
         constexpr std::ptrdiff_t m_hPlayerPawn = 0x80C;
-        constexpr std::ptrdiff_t m_sSanitizedPlayerName = 0x770; // CUtlString / Pointer korumalı okuma yapılacak
+        constexpr std::ptrdiff_t m_sSanitizedPlayerName = 0x770; 
     }
 }
 
@@ -36,16 +35,16 @@ struct PlayerData {
     float x, y;
 };
 
-// Global Tanı ve Senkronizasyon Değişkenleri
+// Global Değişkenler ve Senkronizasyon
 std::string g_Status = "Baslatiliyor...";
 DWORD g_PID = 0;
 uintptr_t g_ClientModule = 0;
 HANDLE g_hProcess = NULL;
 
 std::vector<PlayerData> g_Players;
-std::mutex g_PlayersMutex; // Veri yarışını önleyen kritik mutex kilidi
+std::mutex g_PlayersMutex; // Race Condition engelleyici kilit
 
-// Güvenli WinSock HTTP Web Sunucusu
+// WinSock HTTP Web Server - Kararlı ve Standart Sürüm
 DWORD WINAPI WebServerThread(LPVOID lpParam) {
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
@@ -59,13 +58,19 @@ DWORD WINAPI WebServerThread(LPVOID lpParam) {
     serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
     serverAddr.sin_port = htons(8080);
 
-    bind(serverSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr));
-    listen(serverSocket, SOMAXCONN);
+    char opt = 1;
+    setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    // HTTP isteklerini karşılamak için daha geniş tampon bellek (Büyük Header'lar için)
+    if (bind(serverSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        g_Status = "HATA: 8080 Portu baglanamadi!";
+        return 0;
+    }
+    
+    listen(serverSocket, SOMAXCONN);
     std::vector<char> requestBuffer(4096);
 
     while (true) {
+        // accept() burada thread'i bloke eder ve yeni istek gelene kadar %0 CPU harcar
         SOCKET clientSocket = accept(serverSocket, nullptr, nullptr);
         if (clientSocket != INVALID_SOCKET) {
             recv(clientSocket, requestBuffer.data(), static_cast<int>(requestBuffer.size()) - 1, 0);
@@ -73,7 +78,7 @@ DWORD WINAPI WebServerThread(LPVOID lpParam) {
             std::ostringstream json;
             json << "[\n";
             
-            // CRITICAL: Okuma yaparken veriyi kilitliyoruz, ana thread bu esnada yazamaz!
+            // Veri okunurken kilitlenir, ana thread bu esnada yazamaz
             {
                 std::lock_guard<std::mutex> lock(g_PlayersMutex);
                 for (size_t i = 0; i < g_Players.size(); ++i) {
@@ -89,14 +94,14 @@ DWORD WINAPI WebServerThread(LPVOID lpParam) {
                     if (i + 1 < g_Players.size()) json << ",";
                     json << "\n";
                 }
-            } // Kilit burada otomatik açılır (Scope sonu)
+            }
 
             json << "]";
 
             std::string body = json.str();
             std::ostringstream response;
             
-            // Standarda uygun HTTP yanıtı (Sonunda çift \r\n\r\n ile kilitlenme önlendi)
+            // Standart HTTP Cevabı (\r\n\r\n kilitlenme koruması ile)
             response << "HTTP/1.1 200 OK\r\n"
                      << "Content-Type: application/json\r\n"
                      << "Access-Control-Allow-Origin: *\r\n"
@@ -107,8 +112,10 @@ DWORD WINAPI WebServerThread(LPVOID lpParam) {
 
             send(clientSocket, response.str().c_str(), static_cast<int>(response.str().length()), 0);
             closesocket(clientSocket);
+            
+            // Yoğun tarayıcı isteklerinde CPU'nun şişmesini önleyen hafif nefes aldırma adımı
+            Sleep(5);
         }
-        Sleep(10);
     }
     WSACleanup();
     return 0;
@@ -131,9 +138,9 @@ bool InitializeSystem() {
 
     if (!g_PID) return false;
 
-    g_hProcess = OpenProcess(PROCESS_VM_READ, FALSE, g_PID);
+    g_hProcess = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, g_PID);
     if (!g_hProcess) {
-        g_Status = "HATA: Yonetici izni eksik!";
+        g_Status = "HATA: Yonetici izni eksik! (.exe'yi sag tiklayip yonetici acin)";
         return false;
     }
 
@@ -150,78 +157,93 @@ bool InitializeSystem() {
     CloseHandle(hModSnapshot);
 
     if (!g_ClientModule) {
-        g_Status = "HATA: client.dll baglanamadi!";
+        g_Status = "HATA: client.dll bulunamadi!";
         return false;
     }
 
-    g_Status = "SISTEM AKTIF: http://localhost:8080 hazir.";
+    g_Status = "SISTEM AKTIF: http://localhost:8080 adresini yenileyin.";
     return true;
 }
 
 int main() {
-    SetConsoleTitleA("CS2 Fixed external Web Radar Engine");
+    SetConsoleTitleA("CS2 Fixed Entity Web Radar Engine");
     CreateThread(nullptr, 0, WebServerThread, nullptr, 0, nullptr);
 
-    std::cout << "[+] Tani ve Filtreleme Motoru Baslatildi.\n";
+    std::cout << "[+] Source 2 Gelismis Hafiza Filtreleme Motoru Aktif.\n";
 
     while (true) {
         if (!g_hProcess || !g_ClientModule) {
             if (!InitializeSystem()) {
-                std::cout << "\r[DURUM] " << g_Status << "        " << std::flush;
+                std::cout << "\r[DURUM] " << g_Status << "               " << std::flush;
                 Sleep(1000);
                 continue;
             }
-            std::cout << "\n[+] Oyuna basariyla baglanildi.\n";
+            std::cout << "\n[+] Oyuna baglanti kuruldu. PID: " << g_PID << "\n";
         }
 
         uintptr_t entityList = 0;
         if (!ReadProcessMemory(g_hProcess, (LPCVOID)(g_ClientModule + cs2_dumper::offsets::client_dll::dwEntityList), &entityList, sizeof(entityList), nullptr) || !entityList) {
-            std::cout << "\r[HATA] EntityList okunamiyor, haritaya girilmesi bekleniyor..." << std::flush;
+            std::cout << "\r[HATA] Ana menude bekleniyor veya EntityList adresi eksik... " << std::flush;
             Sleep(1000);
             continue;
         }
 
         std::vector<PlayerData> tempPlayers;
 
-        // Source 2 Max Entity sınırlarında tarama
+        // Source 2 Döngüsü - Kesin Çarpanlar ve Parantez Hizalaması ile
         for (int i = 1; i <= 64; i++) {
-            // Source 2 Doğru Pointer Çarpanı Mimarisi: Node basına 8 byte (0x8) dizilimi
+            // 1. Katman Girişi (Controller Tespiti)
             uintptr_t listEntry = 0;
-            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(entityList + ((8 * (i & 0x7FFF) >> 9) + 16)), &listEntry, sizeof(listEntry), nullptr) || !listEntry) continue;
+            std::ptrdiff_t nodeOffset = (static_cast<std::ptrdiff_t>((8 * (i & 0x7FFF)) >> 9) + 16);
+            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(entityList + nodeOffset), &listEntry, sizeof(listEntry), nullptr) || !listEntry) 
+                continue;
 
+            // KESİN DÜZELTME: Source 2'de nesne atlama çarpanı 120 değil, 128 byte'tır (0x80)
             uintptr_t playerController = 0;
-            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(listEntry + 120 * (i & 0x1FF)), &playerController, sizeof(playerController), nullptr) || !playerController) continue;
+            std::ptrdiff_t controllerOffset = static_cast<std::ptrdiff_t>(128 * (i & 0x1FF));
+            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(listEntry + controllerOffset), &playerController, sizeof(playerController), nullptr) || !playerController) 
+                continue;
 
+            // Controller üzerinden Pawn Handle değerini çekme
             uint32_t playerPawnHandle = 0;
-            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(playerController + schemas::client_dll::m_hPlayerPawn), &playerPawnHandle, sizeof(playerPawnHandle), nullptr) || !playerPawnHandle) continue;
+            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(playerController + schemas::client_dll::m_hPlayerPawn), &playerPawnHandle, sizeof(playerPawnHandle), nullptr) || !playerPawnHandle) 
+                continue;
 
-            // İkinci katman adres doğrulaması (Pointer boyutu 8 byte olarak düzeltildi)
+            // 2. Katman Girişi (Pawn/Oyuncu Gövdesi Tespiti)
             uintptr_t listEntry2 = 0;
-            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(entityList + (8 * ((playerPawnHandle & 0x1FFF) >> 9) + 16)), &listEntry2, sizeof(listEntry2), nullptr) || !listEntry2) continue;
+            std::ptrdiff_t pawnNodeOffset = (static_cast<std::ptrdiff_t>((8 * (playerPawnHandle & 0x1FFF)) >> 9) + 16);
+            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(entityList + pawnNodeOffset), &listEntry2, sizeof(listEntry2), nullptr) || !listEntry2) 
+                continue;
 
+            // KESİN DÜZELTME: İkinci katmanda da nesne atlama çarpanı 128 byte (0x80) olarak güncellendi
             uintptr_t playerPawn = 0;
-            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(listEntry2 + 120 * (playerPawnHandle & 0x1FF)), &playerPawn, sizeof(playerPawn), nullptr) || !playerPawn) continue;
+            std::ptrdiff_t pawnOffset = static_cast<std::ptrdiff_t>(128 * (playerPawnHandle & 0x1FF));
+            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(listEntry2 + pawnOffset), &playerPawn, sizeof(playerPawn), nullptr) || !playerPawn) 
+                continue;
 
+            // Oyuncu temel verilerini güvenli tamponlar ile çekme
             int health = 0;
             int team = 0;
             Vector3 pos{ 0.0f, 0.0f, 0.0f };
             char nameBuf[64]{ 0 };
 
-            ReadProcessMemory(g_hProcess, (LPCVOID)(playerPawn + schemas::client_dll::m_iHealth), &health, sizeof(health), nullptr);
-            ReadProcessMemory(g_hProcess, (LPCVOID)(playerPawn + schemas::client_dll::m_iTeamNum), &team, sizeof(team), nullptr);
-            ReadProcessMemory(g_hProcess, (LPCVOID)(playerPawn + schemas::client_dll::m_vOldOrigin), &pos, sizeof(pos), nullptr);
-            
-            // CUtlString Çözümleme Koruması: İsmin tutulduğu asıl ham pointer adresini çekme
+            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(playerPawn + schemas::client_dll::m_iHealth), &health, sizeof(health), nullptr)) continue;
+            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(playerPawn + schemas::client_dll::m_iTeamNum), &team, sizeof(team), nullptr)) continue;
+            if (!ReadProcessMemory(g_hProcess, (LPCVOID)(playerPawn + schemas::client_dll::m_vOldOrigin), &pos, sizeof(pos), nullptr)) continue;
+
+            // CUtlString / Ham Pointer yapılarından oyuncu adını çözme
             uintptr_t namePointer = 0;
             ReadProcessMemory(g_hProcess, (LPCVOID)(playerController + schemas::client_dll::m_sSanitizedPlayerName), &namePointer, sizeof(namePointer), nullptr);
             
-            if (namePointer != 0) {
-                ReadProcessMemory(g_hProcess, (LPCVOID)namePointer, &nameBuf, sizeof(nameBuf) - 1, nullptr);
+            if (namePointer != 0 && namePointer < 0x7FFFFFFFFFFF) {
+                if (!ReadProcessMemory(g_hProcess, (LPCVOID)namePointer, &nameBuf, sizeof(nameBuf) - 1, nullptr)) {
+                    strcpy_s(nameBuf, "Oyuncu");
+                }
             } else {
-                // Eğer doğrudan adres üzerinden okunması gerekiyorsa fallback koruması
                 ReadProcessMemory(g_hProcess, (LPCVOID)(playerController + schemas::client_dll::m_sSanitizedPlayerName), &nameBuf, sizeof(nameBuf) - 1, nullptr);
             }
 
+            // Filtreleme: Canlı olan ve meşru takımlarda yer alan nesneleri radar listesine aktar
             if (health > 0 && health <= 100 && (team == 2 || team == 3)) {
                 PlayerData p;
                 p.name = (strlen(nameBuf) > 0) ? nameBuf : "Oyuncu";
@@ -233,14 +255,14 @@ int main() {
             }
         }
 
-        // CRITICAL: Yeni verileri global listeye yazarken kilitleme yapıyoruz. Race Condition tamamen engellendi.
+        // Thread güvenli bir şekilde eski listeyi yenisiyle takas ediyoruz
         {
             std::lock_guard<std::mutex> lock(g_PlayersMutex);
             g_Players = std::move(tempPlayers);
         }
 
-        std::cout << "\r[RADAR MOTORU] Aktif Tarama Canli. Tespit Edilen Oyuncu: " << g_Players.size() << "     " << std::flush;
-        Sleep(50); 
+        std::cout << "\r[RADAR] Izleme Aktif | Haritadaki Canli Oyuncu Sayisi: " << g_Players.size() << "     " << std::flush;
+        Sleep(40); 
     }
     return 0;
 }
