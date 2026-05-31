@@ -1,0 +1,29 @@
+name: C++ DLL Automated Builder
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Repoyu Bilgisayara Cek
+      uses: actions/checkout@v4
+
+    - name: MSBuild Geliştirici Ortamını Kur
+      uses: microsoft/setup-msbuild@v2
+
+    - name: C++ Projesini x64 Release Olarak Derle
+      run: |
+        cl.exe /O2 /D_USRDLL /D_WINDLL main.cpp /MT /link /DLL /OUT:CS2_Advanced_Radar.dll /MACHINE:X64 user32.lib
+
+    - name: Derlenen DLL Dosyasını GitHub'a Yukle (Artifact)
+      uses: actions/actions-artifact@v4
+      with:
+        name: Compiled-CS2-Radar
+        path: CS2_Advanced_Radar.dll
+        
