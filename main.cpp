@@ -13,12 +13,12 @@
 
 HANDLE processHandle = nullptr;
 
-// Dumper şemasına göre %100 doğrulanmış net ofsetler
 namespace schema_offsets {
-    constexpr std::ptrdiff_t m_hPlayerPawn = ::cs2_dumper::schemas::client_dll::CCSPlayerController::m_hPlayerPawn;
-    constexpr std::ptrdiff_t m_sSanitizedPlayerName = ::cs2_dumper::schemas::client_dll::CCSPlayerController::m_sSanitizedPlayerName;
+    // Doğrudan fiziksel oyuncu (Pawn) yapısı üzerindeki temel değişkenler
     constexpr std::ptrdiff_t m_iHealth = ::cs2_dumper::schemas::client_dll::C_BaseEntity::m_iHealth;
     constexpr std::ptrdiff_t m_iTeamNum = ::cs2_dumper::schemas::client_dll::C_BaseEntity::m_iTeamNum;
+    constexpr std::ptrdiff_t m_hController = ::cs2_dumper::schemas::client_dll::C_BaseEntity::m_hController;
+    constexpr std::ptrdiff_t m_sSanitizedPlayerName = ::cs2_dumper::schemas::client_dll::CCSPlayerController::m_sSanitizedPlayerName;
 }
 
 struct PlayerInfo {
@@ -83,20 +83,17 @@ uintptr_t GetModuleBaseAddress(DWORD pid, const wchar_t* moduleName) {
 
 // Konsol başlangıç ayarları
 void SetupConsole() {
-    SetConsoleTitleW(L"CS2 Radar v1.2 Final");
+    SetConsoleTitleW(L"CS2 Radar v1.3 Dynamic");
     
-    // Yanıp sönen beyaz imleci gizle
     HANDLE consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
     CONSOLE_CURSOR_INFO cursorInfo;
     GetConsoleCursorInfo(consoleHandle, &cursorInfo);
     cursorInfo.bVisible = FALSE;
     SetConsoleCursorInfo(consoleHandle, &cursorInfo);
     
-    // Konsol penceresinin boyutunu sabitle
     system("mode con: cols=65 lines=30");
 }
 
-// Verileri ekrana basan fonksiyon (Titreme, kayma ve hayalet satır engelli)
 void DisplayPlayers(const std::vector<PlayerInfo>& players, int localTeam) {
     COORD cursorPos = { 0, 0 };
     SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), cursorPos);
@@ -121,7 +118,6 @@ void DisplayPlayers(const std::vector<PlayerInfo>& players, int localTeam) {
         printedLines++;
     }
     
-    // Hayalet Satır Temizliği
     for (int k = printedLines; k < 20; k++) {
         std::cout << "                                                               \n";
     }
@@ -175,34 +171,40 @@ int main() {
         
         if (entityList && localPlayerPawn) {
             std::vector<PlayerInfo> currentPlayers;
-            
-            // Kendi takımımızı doğrudan yerel oyuncu yapısı üzerinden okuyoruz (En kararlı yöntem)
             int localTeam = Read<int>(localPlayerPawn + schema_offsets::m_iTeamNum);
 
-            // 64 yerine Source 2'nin izin verdiği maksimum oyuncu indeks aralığını tarıyoruz
-            for (int i = 1; i < 64; i++) {
+            // Maksimum varlık listesi aralığında doğrudan Pawn (fiziksel nesne) taraması yapılıyor
+            for (int i = 1; i < 512; i++) {
                 uintptr_t listEntry = Read<uintptr_t>(entityList + (8 * (i >> 9) + 16));
                 if (!listEntry) continue;
                 
-                uintptr_t playerController = Read<uintptr_t>(listEntry + 120 * (i & 0x1FF));
-                if (!playerController) continue;
+                uintptr_t currentPawn = Read<uintptr_t>(listEntry + 120 * (i & 0x1FF));
+                if (!currentPawn || currentPawn == localPlayerPawn) continue;
                 
-                uint32_t pawnHandle = Read<uint32_t>(playerController + schema_offsets::m_hPlayerPawn);
-                if (!pawnHandle) continue;
+                int health = Read<int>(currentPawn + schema_offsets::m_iHealth);
+                int team = Read<int>(currentPawn + schema_offsets::m_iTeamNum);
                 
-                uintptr_t listEntry2 = Read<uintptr_t>(entityList + (8 * ((pawnHandle & 0x1FFF) >> 9) + 16));
-                if (!listEntry2) continue;
-                
-                uintptr_t playerPawn = Read<uintptr_t>(listEntry2 + 120 * (pawnHandle & 0x1FF));
-                if (!playerPawn || playerPawn == localPlayerPawn) continue; // Kendimizi listede göstermiyoruz
-                
-                int health = Read<int>(playerPawn + schema_offsets::m_iHealth);
-                int team = Read<int>(playerPawn + schema_offsets::m_iTeamNum);
-                std::string name = ReadString(playerController + schema_offsets::m_sSanitizedPlayerName);
-                
-                // Oyuncu hayattaysa ve geçerli takımlardaysa listeye ekle
-                if (health > 0 && health <= 100 && (team == 2 || team == 3) && !name.empty()) {
-                    currentPlayers.push_back({i, health, team, name});
+                // Sadece geçerli takımlardaki canlı oyuncuları filtrele
+                if (health > 0 && health <= 100 && (team == 2 || team == 3)) {
+                    
+                    // İsmi çekebilmek için Pawn üzerinden Controller'a ters bağlantı kuruyoruz
+                    std::string playerName = "Unknown Player";
+                    uint32_t controllerHandle = Read<uint32_t>(currentPawn + schema_offsets::m_hController);
+                    if (controllerHandle != 0xFFFFFFFF) {
+                        uint32_t controllerIndex = controllerHandle & 0x1FFF;
+                        uintptr_t ctrlListEntry = Read<uintptr_t>(entityList + (8 * (controllerIndex >> 9) + 16));
+                        if (ctrlListEntry) {
+                            uintptr_t playerController = Read<uintptr_t>(ctrlListEntry + 120 * (controllerIndex & 0x1FF));
+                            if (playerController) {
+                                std::string fetchedName = ReadString(playerController + schema_offsets::m_sSanitizedPlayerName);
+                                if (!fetchedName.empty()) {
+                                    playerName = fetchedName;
+                                }
+                            }
+                        }
+                    }
+                    
+                    currentPlayers.push_back({ i, health, team, playerName });
                 }
             }
             
@@ -213,7 +215,7 @@ int main() {
             std::cout << "Oyun verileri bekleniyor (Maca girilmesi gerek)...          " << std::endl;
         }
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        std::this_thread::sleep_for(std::chrono::milliseconds(35));
     }
     
     if (processHandle) {
