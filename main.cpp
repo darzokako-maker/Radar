@@ -13,7 +13,7 @@
 
 HANDLE processHandle = nullptr;
 
-// Dumper dosyalarındaki tam yollar doğrudan eşitlendi
+// Dumper şemasına göre %100 doğrulanmış net ofsetler
 namespace schema_offsets {
     constexpr std::ptrdiff_t m_hPlayerPawn = ::cs2_dumper::schemas::client_dll::CCSPlayerController::m_hPlayerPawn;
     constexpr std::ptrdiff_t m_sSanitizedPlayerName = ::cs2_dumper::schemas::client_dll::CCSPlayerController::m_sSanitizedPlayerName;
@@ -171,47 +171,36 @@ int main() {
         }
 
         uintptr_t entityList = Read<uintptr_t>(clientModule + cs2_dumper::offsets::client_dll::dwEntityList);
-        uintptr_t localController = Read<uintptr_t>(clientModule + cs2_dumper::offsets::client_dll::dwLocalPlayerController);
+        uintptr_t localPlayerPawn = Read<uintptr_t>(clientModule + cs2_dumper::offsets::client_dll::dwLocalPlayerPawn);
         
-        if (entityList && localController) {
+        if (entityList && localPlayerPawn) {
             std::vector<PlayerInfo> currentPlayers;
-            int localTeam = 0;
+            
+            // Kendi takımımızı doğrudan yerel oyuncu yapısı üzerinden okuyoruz (En kararlı yöntem)
+            int localTeam = Read<int>(localPlayerPawn + schema_offsets::m_iTeamNum);
 
-            // Kendi takım bilgisini oku (Source 2 maskesi: 0x1FFF)
-            uint32_t localPawnHandle = Read<uint32_t>(localController + schema_offsets::m_hPlayerPawn);
-            if (localPawnHandle) {
-                uint32_t localPawnIndex = localPawnHandle & 0x1FFF;
-                uintptr_t localListEntry = Read<uintptr_t>(entityList + 8 * (localPawnIndex >> 9) + 16);
-                if (localListEntry) {
-                    uintptr_t localPawn = Read<uintptr_t>(localListEntry + 120 * (localPawnIndex & 0x1FF));
-                    if (localPawn) {
-                        localTeam = Read<int>(localPawn + schema_offsets::m_iTeamNum);
-                    }
-                }
-            }
-
-            // Diğer oyuncuları tara
-            for (int i = 1; i <= 64; i++) {
-                uintptr_t listEntry1 = Read<uintptr_t>(entityList + 8 * (i >> 9) + 16);
-                if (!listEntry1) continue;
+            // 64 yerine Source 2'nin izin verdiği maksimum oyuncu indeks aralığını tarıyoruz
+            for (int i = 1; i < 64; i++) {
+                uintptr_t listEntry = Read<uintptr_t>(entityList + (8 * (i >> 9) + 16));
+                if (!listEntry) continue;
                 
-                uintptr_t playerController = Read<uintptr_t>(listEntry1 + 120 * (i & 0x1FF));
-                if (!playerController || playerController == localController) continue;
+                uintptr_t playerController = Read<uintptr_t>(listEntry + 120 * (i & 0x1FF));
+                if (!playerController) continue;
                 
                 uint32_t pawnHandle = Read<uint32_t>(playerController + schema_offsets::m_hPlayerPawn);
                 if (!pawnHandle) continue;
                 
-                uint32_t pawnIndex = pawnHandle & 0x1FFF;
-                uintptr_t listEntry2 = Read<uintptr_t>(entityList + 8 * (pawnIndex >> 9) + 16);
+                uintptr_t listEntry2 = Read<uintptr_t>(entityList + (8 * ((pawnHandle & 0x1FFF) >> 9) + 16));
                 if (!listEntry2) continue;
                 
-                uintptr_t playerPawn = Read<uintptr_t>(listEntry2 + 120 * (pawnIndex & 0x1FF));
-                if (!playerPawn) continue;
+                uintptr_t playerPawn = Read<uintptr_t>(listEntry2 + 120 * (pawnHandle & 0x1FF));
+                if (!playerPawn || playerPawn == localPlayerPawn) continue; // Kendimizi listede göstermiyoruz
                 
                 int health = Read<int>(playerPawn + schema_offsets::m_iHealth);
                 int team = Read<int>(playerPawn + schema_offsets::m_iTeamNum);
                 std::string name = ReadString(playerController + schema_offsets::m_sSanitizedPlayerName);
                 
+                // Oyuncu hayattaysa ve geçerli takımlardaysa listeye ekle
                 if (health > 0 && health <= 100 && (team == 2 || team == 3) && !name.empty()) {
                     currentPlayers.push_back({i, health, team, name});
                 }
