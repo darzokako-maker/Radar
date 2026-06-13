@@ -1,4 +1,4 @@
-name: CS2 Schema Radar Build Pipeline
+name: CS2 Optimized Radar CI Pipeline
 
 on:
   push:
@@ -11,21 +11,21 @@ jobs:
     runs-on: windows-2022
 
     steps:
-    - name: Kodu Depodan Cek
+    - name: Depoyu Klonla
       uses: actions/checkout@v4
 
-    - name: MSBuild ve Visual Studio Araclarini Yukle
+    - name: MSBuild Araclarini Yukle
       uses: microsoft/setup-msbuild@v2
 
-    - name: CMake Yapilandirmasini Olustur
+    - name: CMake Projesini Yapilandir
       run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
-    - name: Projeyi C++20 Modunda Derle
+    - name: Projeyi Release Olarak Derle
       run: cmake --build build --config Release
 
-    - name: Olusan EXE Dosyasini Artifact Olarak Yukle
+    - name: Derlenen Calistirilabilir EXE'yi Yukle
       uses: actions/upload-artifact@v4
       with:
-        name: CS2-Schema-Radar
+        name: CS2-Optimized-Radar-EXE
         path: build/Release/*.exe
         
