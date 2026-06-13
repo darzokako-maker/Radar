@@ -5,15 +5,25 @@
 #include <string>
 #include <vector>
 #include <iomanip>
-#include <algorithm> // std::min fonksiyonu için zorunlu
+#include <algorithm> // std::min için
 
-// Güncel offsetler (Proje klasöründe mevcut olmalıdır)
+// Proje klasöründeki dumper dosyaları
 #include "offsets.hpp"
 #include "client_dll.hpp"
 
 HANDLE processHandle = nullptr;
 
-// Oyuncu ve takım verilerini tutan yapı
+// Şema hiyerarşisini dumper dosyasıyla %100 eşleştiren güvenli alt alanlar
+namespace schema_offsets {
+    using namespace cs2_dumper::schemas::client_dll;
+    
+    // Sınıf içi değişkenlerin tam yolları
+    constexpr std::ptrdiff_t m_hPlayerPawn = CCSPlayerController::m_hPlayerPawn;
+    constexpr std::ptrdiff_t m_sSanitizedPlayerName = CCSPlayerController::m_sSanitizedPlayerName;
+    constexpr std::ptrdiff_t m_iHealth = C_BaseEntity::m_iHealth;
+    constexpr std::ptrdiff_t m_iTeamNum = C_BaseEntity::m_iTeamNum;
+}
+
 struct PlayerInfo {
     int index;
     int health;
@@ -21,7 +31,6 @@ struct PlayerInfo {
     std::string name;
 };
 
-// Güvenli bellek okuma şablonu
 template <typename T>
 T Read(uintptr_t address) {
     T value{};
@@ -29,15 +38,12 @@ T Read(uintptr_t address) {
     return value;
 }
 
-// String okuma (Bellek sınırı güvenli)
 std::string ReadString(uintptr_t address, size_t maxSize = 32) {
     char buffer[128] = { 0 };
-    // min yerine standart std::min kullanıyoruz ve bellek taşmasını engelliyoruz
     ReadProcessMemory(processHandle, reinterpret_cast<LPCVOID>(address), buffer, (std::min)(maxSize, sizeof(buffer) - 1), nullptr);
     return std::string(buffer);
 }
 
-// Process ID bulma fonksiyonu
 DWORD GetProcessId(const wchar_t* processName) {
     DWORD pid = 0;
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -56,7 +62,6 @@ DWORD GetProcessId(const wchar_t* processName) {
     return pid;
 }
 
-// Modül base adresini bulma fonksiyonu
 uintptr_t GetModuleBaseAddress(DWORD pid, const wchar_t* moduleName) {
     uintptr_t baseAddress = 0;
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
@@ -75,24 +80,17 @@ uintptr_t GetModuleBaseAddress(DWORD pid, const wchar_t* moduleName) {
     return baseAddress;
 }
 
-// Konsol başlangıç ayarları
 void SetupConsole() {
     SetConsoleTitle(L"CS2 Radar v1.1 Optimized");
-    
-    // Yanıp sönen imleci gizle
     HANDLE consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
     CONSOLE_CURSOR_INFO cursorInfo;
     GetConsoleCursorInfo(consoleHandle, &cursorInfo);
     cursorInfo.bVisible = FALSE;
     SetConsoleCursorInfo(consoleHandle, &cursorInfo);
-    
-    // Konsol boyutunu sabitle
     system("mode con: cols=65 lines=30");
 }
 
-// Verileri ekrana basan fonksiyon (Titreme ve hayalet satır engelli)
 void DisplayPlayers(const std::vector<PlayerInfo>& players, int localTeam) {
-    // İmleci temizlemeden sol üste çek (Titremeyi önler)
     COORD cursorPos = { 0, 0 };
     SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), cursorPos);
     
@@ -109,7 +107,6 @@ void DisplayPlayers(const std::vector<PlayerInfo>& players, int localTeam) {
             teamStr = (p.team == 2) ? "T-TAK" : "CT-TAK";
         }
         
-        // Sabit sütun genişliği için manipülatörleri her satırda sıfırlayarak kullanıyoruz
         std::cout << " [" << std::setw(2) << std::setfill('0') << p.index << "] | "
                   << std::setfill(' ') << std::setw(5) << teamStr << "  | "
                   << std::setw(3) << p.health << " HP | "
@@ -117,7 +114,6 @@ void DisplayPlayers(const std::vector<PlayerInfo>& players, int localTeam) {
         printedLines++;
     }
     
-    // Hayalet satırları temizleme: Eski döngüden kalan artıkları boşluk basarak temizler
     for (int k = printedLines; k < 20; k++) {
         std::cout << "                                                               \n";
     }
@@ -140,7 +136,6 @@ int main() {
     
     std::cout << "[+] CS2 Bulundu! PID: " << pid << std::endl;
     
-    // Optimum yetkilendirme ile handle açma (Gereksiz yetkiler kaldırıldı)
     processHandle = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
     if (!processHandle) {
         std::cout << "[-] Erisim engellendi! Programi Yonetici olarak calistirin." << std::endl;
@@ -160,11 +155,9 @@ int main() {
     std::cout << "[*] Radar baslatiliyor..." << std::endl;
     
     std::this_thread::sleep_for(std::chrono::seconds(1));
-    system("cls"); // İlk çizim öncesi konsolu temizle
+    system("cls");
     
-    // Ana Döngü
     while (true) {
-        // Çıkış mekanizması (Konsolda END tuşuna basarak güvenli kapatma)
         if (GetAsyncKeyState(VK_END) & 0x8000) {
             break;
         }
@@ -176,21 +169,20 @@ int main() {
             std::vector<PlayerInfo> currentPlayers;
             int localTeam = 0;
 
-            // 1. KISIM: Kendi (Local) takım bilgisini tek seferde oku
-            uint32_t localPawnHandle = Read<uint32_t>(localController + cs2_dumper::schemas::client_dll::CCSPlayerController::m_hPlayerPawn);
+            // Kendi takım bilgisini oku
+            uint32_t localPawnHandle = Read<uint32_t>(localController + schema_offsets::m_hPlayerPawn);
             if (localPawnHandle) {
-                // DOĞRU DİZİN MASKESİ: Source 2 motoru için 0x1FFF kullanılmalıdır
                 uint32_t localPawnIndex = localPawnHandle & 0x1FFF;
                 uintptr_t localListEntry = Read<uintptr_t>(entityList + 8 * (localPawnIndex >> 9) + 16);
                 if (localListEntry) {
                     uintptr_t localPawn = Read<uintptr_t>(localListEntry + 120 * (localPawnIndex & 0x1FF));
                     if (localPawn) {
-                        localTeam = Read<int>(localPawn + cs2_dumper::schemas::client_dll::C_BaseEntity::m_iTeamNum);
+                        localTeam = Read<int>(localPawn + schema_offsets::m_iTeamNum);
                     }
                 }
             }
 
-            // 2. KISIM: Diğer oyuncuları tara
+            // Diğer oyuncuları tara
             for (int i = 1; i <= 64; i++) {
                 uintptr_t listEntry1 = Read<uintptr_t>(entityList + 8 * (i >> 9) + 16);
                 if (!listEntry1) continue;
@@ -198,10 +190,9 @@ int main() {
                 uintptr_t playerController = Read<uintptr_t>(listEntry1 + 120 * (i & 0x1FF));
                 if (!playerController || playerController == localController) continue;
                 
-                uint32_t pawnHandle = Read<uint32_t>(playerController + cs2_dumper::schemas::client_dll::CCSPlayerController::m_hPlayerPawn);
+                uint32_t pawnHandle = Read<uint32_t>(playerController + schema_offsets::m_hPlayerPawn);
                 if (!pawnHandle) continue;
                 
-                // DOĞRU DİZİN MASKESİ: Oyuncu taramasında da 0x1FFF maskesi uygulandı
                 uint32_t pawnIndex = pawnHandle & 0x1FFF;
                 uintptr_t listEntry2 = Read<uintptr_t>(entityList + 8 * (pawnIndex >> 9) + 16);
                 if (!listEntry2) continue;
@@ -209,17 +200,15 @@ int main() {
                 uintptr_t playerPawn = Read<uintptr_t>(listEntry2 + 120 * (pawnIndex & 0x1FF));
                 if (!playerPawn) continue;
                 
-                int health = Read<int>(playerPawn + cs2_dumper::schemas::client_dll::C_BaseEntity::m_iHealth);
-                int team = Read<int>(playerPawn + cs2_dumper::schemas::client_dll::C_BaseEntity::m_iTeamNum);
-                std::string name = ReadString(playerController + cs2_dumper::schemas::client_dll::CCSPlayerController::m_sSanitizedPlayerName);
+                int health = Read<int>(playerPawn + schema_offsets::m_iHealth);
+                int team = Read<int>(playerPawn + schema_offsets::m_iTeamNum);
+                std::string name = ReadString(playerController + schema_offsets::m_sSanitizedPlayerName);
                 
-                // Senin yazdığın o kusursuz filtreleme kuralları
                 if (health > 0 && health <= 100 && (team == 2 || team == 3) && !name.empty()) {
                     currentPlayers.push_back({i, health, team, name});
                 }
             }
             
-            // Ekrana bas
             DisplayPlayers(currentPlayers, localTeam);
         } else {
             COORD cursorPos = { 0, 0 };
@@ -227,11 +216,9 @@ int main() {
             std::cout << "Oyun verileri bekleniyor (Maca girilmesi gerek)...          " << std::endl;
         }
         
-        // İşlemciyi yormamak için 30ms bekleme (Yaklaşık ~33 FPS güncelleme hızı)
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
     
-    // Güvenli kapanış (Zombie Handle oluşumunu engeller)
     if (processHandle) {
         CloseHandle(processHandle);
     }
