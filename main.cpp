@@ -81,7 +81,9 @@ uintptr_t GetModuleBaseAddress(DWORD pid, const wchar_t* moduleName) {
 }
 
 void SetupConsole() {
-    SetConsoleTitle(L"CS2 Radar v1.1 Optimized");
+    // HATA DÜZELTMESİ: SetConsoleTitle yerine doğrudan geniş karakter (W) fonksiyonu çağrıldı
+    SetConsoleTitleW(L"CS2 Radar v1.1 Optimized");
+    
     HANDLE consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
     CONSOLE_CURSOR_INFO cursorInfo;
     GetConsoleCursorInfo(consoleHandle, &cursorInfo);
