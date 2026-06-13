@@ -1,153 +1,189 @@
 #include <windows.h>
+#include <tlhelp32.h>
 #include <iostream>
-#include <chrono>
 #include <thread>
-#include <random>
-#include <cmath>
+#include <string>
 
-// Windows'un alt katman fare enjeksiyon veri yapısı
-struct InjectedInputMouseInfo {
-    int dx;
-    int dy;
-    DWORD mouseData;
-    DWORD dwFlags;
-    DWORD time;
-    ULONG_PTR dwExtraInfo;
-};
+// Proje klasörüne yüklediğin güncel iki dosyayı dahil ediyoruz
+#include "offsets.hpp"    // dwEntityList ve dwLocalPlayerController için
+#include "client_dll.hpp" // Şemalar (CBasePlayerController, C_BaseEntity vb.) için
 
-// Gizli API'nin fonksiyon imzası
-typedef BOOL(WINAPI* LPFN_NTUSERINJECTMOUSEINPUT)(InjectedInputMouseInfo*, DWORD);
+HANDLE processHandle = nullptr;
 
-// --- AYARLAR ---
-const int AIM_KEY = 0x58; // 'X' Tuşu
-const int FOV_X = 85;     
-const int FOV_Y = 85;
+// 64-bit Güvenli Bellek Okuma Şablonu
+template <typename T>
+T Read(uintptr_t address) {
+    T value{};
+    ReadProcessMemory(processHandle, reinterpret_cast<LPCVOID>(address), &value, sizeof(T), nullptr);
+    return value;
+}
 
-std::random_device rd;
-std::mt19937 gen(rd());
+// Oyuncu İsmi Okuyucu (UTF-8 Güvenli)
+std::string ReadPlayerName(uintptr_t address) {
+    char buffer[32] = { 0 };
+    ReadProcessMemory(processHandle, reinterpret_cast<LPCVOID>(address), &buffer, sizeof(buffer) - 1, nullptr);
+    return std::string(buffer);
+}
 
-// --- STABİL PID MOTORU ---
-struct PIDController {
-    float kp = 0.15f; 
-    float ki = 0.01f; 
-    float kd = 0.04f; 
+// Ekranı kırpıştırmadan imleci sol üste sarma fonksiyonu
+void ResetCursor() {
+    COORD cursorPosition{ 0, 0 };
+    SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), cursorPosition);
+}
 
-    float integralX = 0, integralY = 0;
-    float prevErrorX = 0, prevErrorY = 0;
+// Konsoldaki yanıp sönen beyaz imleci gizleme fonksiyonu
+void HideConsoleCursor() {
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_CURSOR_INFO cursorInfo;
+    GetConsoleCursorInfo(out, &cursorInfo);
+    cursorInfo.bVisible = FALSE; 
+    SetConsoleCursorInfo(out, &cursorInfo);
+}
 
-    void Reset() {
-        integralX = 0; integralY = 0;
-        prevErrorX = 0; prevErrorY = 0;
+// Sistemden client.dll adresini çeken fonksiyon
+uintptr_t GetModuleBaseAddress(DWORD pid, const wchar_t* moduleName) {
+    uintptr_t baseAddress = 0;
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snapshot != INVALID_HANDLE_VALUE) {
+        MODULEENTRY32W modEntry{.dwSize = sizeof(MODULEENTRY32W)};
+        if (Module32FirstW(snapshot, &modEntry)) {
+            do {
+                if (_wcsicmp(modEntry.szModule, moduleName) == 0) {
+                    baseAddress = reinterpret_cast<uintptr_t>(modEntry.modBaseAddr);
+                    break;
+                }
+            } while (Module32NextW(snapshot, &modEntry));
+        }
+        CloseHandle(snapshot);
     }
-
-    void Update(float errorX, float errorY, float& outMoveX, float& outMoveY, float deltaTime) {
-        integralX += errorX * deltaTime;
-        integralY += errorY * deltaTime;
-
-        float derivativeX = (errorX - prevErrorX) / deltaTime;
-        float derivativeY = (errorY - prevErrorY) / deltaTime;
-
-        // İnsansı kas yorulması gürültüsü
-        std::uniform_real_distribution<> noise(-0.007, 0.007);
-        
-        outMoveX = (errorX * (kp + noise(gen))) + (integralX * ki) + (derivativeX * kd);
-        outMoveY = (errorY * (kp + noise(gen))) + (integralY * ki) + (derivativeY * kd);
-
-        prevErrorX = errorX;
-        prevErrorY = errorY;
-    }
-};
-
-PIDController pid;
-bool isTracking = false;
-
-// --- DİNAMİK API ÇAĞRISI VE GİZLİ ENJEKSİYON ---
-void MoveMouseSecret(int dx, int dy) {
-    // Statik analiz araçlarının "win32" string aramalarında yakalanmaması için string parçalama (String Shrouding)
-    // "user32.dll" ve "NtUserInjectMouseInput" isimlerini çalışma zamanında oluşturuyoruz
-    char u32[] = { 'u','s','e','r','3','2','.','d','l','l','\0' };
-    char apiName[] = { 'N','t','U','s','e','r','I','n','j','e','c','t','M','o','u','s','e','I','n','j','e','c','t','\0' }; 
-    // Not: Gerçek fonksiyon adı "NtUserInjectMouseInput"'tur. Aşağıda tam adıyla eşleşecek şekilde çağrılır.
-
-    HMODULE hUser32 = GetModuleHandleA(u32);
-    if (!hUser32) hUser32 = LoadLibraryA(u32);
-    if (!hUser32) return;
-
-    // Fonksiyon göstericisini doğrudan IAT listesine sokmadan dinamik alıyoruz
-    LPFN_NTUSERINJECTMOUSEINPUT NtUserInjectMouseInput = 
-        (LPFN_NTUSERINJECTMOUSEINPUT)GetProcAddress(hUser32, "NtUserInjectMouseInput");
-
-    if (!NtUserInjectMouseInput) return;
-
-    // Pasif donanım zaman damgası doğrulaması
-    DWORD spoofedTime = GetMessageTime();
-    ULONG_PTR spoofedExtraInfo = (ULONG_PTR)GetCurrentThreadId() ^ 0xDEADBEEF;
-
-    InjectedInputMouseInfo mouseInfo = { 0 };
-    mouseInfo.dx = dx;
-    mouseInfo.dy = dy;
-    mouseInfo.dwFlags = 0x0001; // MOUSEEVENTF_MOVE (Relatif hareket)
-    mouseInfo.time = spoofedTime;
-    mouseInfo.dwExtraInfo = spoofedExtraInfo;
-
-    // SendInput yerine bu gizli sistem çağrısını tetikliyoruz
-    NtUserInjectMouseInput(&mouseInfo, 1);
-
-    // Bellek temizliği
-    SecureZeroMemory(&mouseInfo, sizeof(InjectedInputMouseInfo));
+    return baseAddress;
 }
 
 int main() {
-    // Performans kararlılığı için işlem önceliğini yüksek seviyeye çek
-    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+    SetConsoleTitleW(L"CS2 Otomatik Ofset Radar v3.0");
+    HideConsoleCursor(); // Başlangıçta imleci gizle
+    
+    std::cout << "[+] CS2 (cs2.exe) Bekleniyor..." << std::endl;
 
-    // Konsol penceresini arka planda tamamen gizle
-    ShowWindow(GetConsoleWindow(), SW_HIDE);
+    DWORD pid = 0;
+    while (pid == 0) {
+        HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snapshot != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32W procEntry{.dwSize = sizeof(PROCESSENTRY32W)};
+            if (Process32FirstW(snapshot, &procEntry)) {
+                do {
+                    if (_wcsicmp(procEntry.szExeFile, L"cs2.exe") == 0) {
+                        pid = procEntry.th32ProcessID;
+                        break;
+                    }
+                } while (Process32NextW(snapshot, &procEntry));
+            }
+            CloseHandle(snapshot);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
 
-    auto lastTime = std::chrono::steady_clock::now();
+    processHandle = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    if (!processHandle) {
+        std::cout << "[-] Erisim engellendi! Yonetici olarak calistirin." << std::endl;
+        return 1;
+    }
+
+    uintptr_t clientModule = GetModuleBaseAddress(pid, L"client.dll");
+    system("cls"); // İlk bağlantıda konsolu bir kez temizle
 
     while (true) {
-        // X Tuşuna basılı tutuluyor mu?
-        if (GetAsyncKeyState(AIM_KEY) & 0x8000) {
-            if (!isTracking) {
-                isTracking = true;
-                pid.Reset(); 
-            }
-
-            auto currentTime = std::chrono::steady_clock::now();
-            float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
-            lastTime = currentTime;
-
-            if (deltaTime <= 0.0f || deltaTime > 0.1f) deltaTime = 0.004f;
-
-            // Örnek hedef girdileri (Göz modülünden beslenen veriler)
-            int tX = 35; 
-            int tY = 8;  
-            int tHeight = 110; 
-
-            if (std::abs(tX) < FOV_X && std::abs(tY) < FOV_Y) {
-                // Dinamik Mesafe Oranlaması (Kafa Ofseti)
-                float dynamicYOffset = -(tHeight * 0.142f);
-                
-                // İstatistiki analiz koruması için kafa içi rastgele mikro sapma
-                std::uniform_real_distribution<> headNoise(-1.0f, 1.0f);
-                dynamicYOffset += headNoise(gen);
-
-                float moveX = 0, moveY = 0;
-                
-                // PID Motoru stabil ve insansı ivmeyi hesaplar
-                pid.Update((float)tX, (float)tY + dynamicYOffset, moveX, moveY, deltaTime);
-
-                // Gizli enjeksiyon motorunu tetikle
-                MoveMouseSecret(static_cast<int>(moveX), static_cast<int>(moveY));
-            }
-        } else {
-            isTracking = false;
+        // offsets.hpp içerisindeki tam hiyerarşik isim alanlarından ana adresleri okuyoruz
+        uintptr_t entityList = Read<uintptr_t>(clientModule + cs2_dumper::offsets::client_dll::dwEntityList);
+        uintptr_t localController = Read<uintptr_t>(clientModule + cs2_dumper::offsets::client_dll::dwLocalPlayerController);
+        
+        if (!entityList || !localController) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            continue;
         }
 
-        // Asenkron kaotik bekleme süreleri (VACNet frekans eşleşmesini engeller)
-        std::uniform_int_distribution<> loopDelay(3, 6);
-        std::this_thread::sleep_for(std::chrono::milliseconds(loopDelay(gen)));
+        // client_dll.hpp -> CCSPlayerController altındaki m_hPlayerPawn okuması (0x80C)
+        uint32_t localPawnHandle = Read<uint32_t>(localController + cs2_dumper::schemas::client_dll::CCSPlayerController::m_hPlayerPawn);
+        uint32_t localPawnIndexFromHandle = localPawnHandle & 0x1FFF;
+        
+        uintptr_t localEntryIndex = 16 + (((localPawnIndexFromHandle & 0x7FFF) >> 9) * 8);
+        uintptr_t localEntry = Read<uintptr_t>(entityList + localEntryIndex);
+        
+        int localTeam = 0;
+        if (localEntry >= 0x10000 && localEntry <= 0x7FFFFFFEFFFF) {
+            uintptr_t localPawn = Read<uintptr_t>(localEntry + (120 * (localPawnIndexFromHandle & 0x1FF)));
+            if (localPawn >= 0x10000 && localPawn <= 0x7FFFFFFEFFFF) {
+                // client_dll.hpp -> C_BaseEntity altındaki m_iTeamNum okuması (0x3E3)
+                localTeam = Read<int>(localPawn + cs2_dumper::schemas::client_dll::C_BaseEntity::m_iTeamNum);
+            }
+        }
+
+        // Akıcı ve titremeyen ekran yenileme başlangıcı
+        ResetCursor();
+        std::cout << "====================================================" << std::endl;
+        std::cout << " ID  | TAKIM | CAN    | OYUNCU ADI                  " << std::endl;
+        std::cout << "====================================================" << std::endl;
+
+        int activeCount = 0;
+
+        for (int i = 1; i < 64; i++) {
+            // Katman 1: Ana liste girdisinin hesabı
+            uintptr_t listEntryIndex = 16 + (((i & 0x7FFF) >> 9) * 8);
+            uintptr_t listEntry = Read<uintptr_t>(entityList + listEntryIndex);
+            
+            if (listEntry < 0x10000 || listEntry > 0x7FFFFFFEFFFF) continue;
+
+            // Katman 2: Controller adresine erişim
+            uintptr_t controllerIndex = 120 * (i & 0x1FF);
+            uintptr_t playerController = Read<uintptr_t>(listEntry + controllerIndex);
+            
+            if (playerController < 0x10000 || playerController > 0x7FFFFFFEFFFF) continue;
+            if (playerController == localController) continue;
+
+            // Katman 3: Güncel şema üzerinden Pawn Handle okuma
+            uint32_t playerPawnHandle = Read<uint32_t>(playerController + cs2_dumper::schemas::client_dll::CCSPlayerController::m_hPlayerPawn);
+            if (!playerPawnHandle) continue;
+
+            // Maskeleme mantığı
+            uint32_t pawnIndexFromHandle = playerPawnHandle & 0x1FFF;
+
+            // Katman 4: İkinci liste girdisi (Pawn List Entry) hesabı
+            uintptr_t listEntry2Index = 16 + (((pawnIndexFromHandle & 0x7FFF) >> 9) * 8);
+            uintptr_t listEntry2 = Read<uintptr_t>(entityList + listEntry2Index);
+            
+            if (listEntry2 < 0x10000 || listEntry2 > 0x7FFFFFFEFFFF) continue;
+
+            // Katman 5: Asıl fiziksel gövde (Pawn) adresine erişim
+            uintptr_t pawnIndex = 120 * (pawnIndexFromHandle & 0x1FF);
+            uintptr_t playerPawn = Read<uintptr_t>(listEntry2 + pawnIndex);
+            
+            if (playerPawn < 0x10000 || playerPawn > 0x7FFFFFFEFFFF) continue;
+
+            // --- GÜVENLİ BÖLGE (Doğrulanmış Güncel Şemalar) ---
+            int health = Read<int>(playerPawn + cs2_dumper::schemas::client_dll::C_BaseEntity::m_iHealth); // 0x344
+            int team = Read<int>(playerPawn + cs2_dumper::schemas::client_dll::C_BaseEntity::m_iTeamNum);   // 0x3E3
+            
+            // Yüklediğin güncel client_dll.hpp içindeki m_sSanitizedPlayerName (0x760) alanından UTF-8 isim okuma
+            std::string name = ReadPlayerName(playerController + cs2_dumper::schemas::client_dll::CCSPlayerController::m_sSanitizedPlayerName);
+
+            if (health > 0 && health <= 100 && !name.empty()) {
+                std::string teamStr = (team == localTeam) ? "DOST " : "RAKIP";
+                std::cout << " [" << (i < 10 ? "0" : "") << i << "] | " 
+                          << teamStr << " | " 
+                          << (health < 100 ? " " : "") << (health < 10 ? " " : "") << health << " HP | " 
+                          << name << "                               \n";
+                activeCount++;
+            }
+        }
+
+        // Listeden çıkan/ölen oyuncuların alt satırlarda kalıntı bırakmaması için dinamik temizlik
+        for (int k = activeCount; k < 32; k++) {
+            std::cout << "                                                               \n";
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(30)); 
     }
+
+    if (processHandle) CloseHandle(processHandle);
     return 0;
 }
