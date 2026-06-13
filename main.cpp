@@ -7,21 +7,18 @@
 #include <iomanip>
 #include <algorithm> // std::min için
 
-// Proje klasöründeki dumper dosyaları
+// Proje klasöründeki güncel dumper dosyaları
 #include "offsets.hpp"
 #include "client_dll.hpp"
 
 HANDLE processHandle = nullptr;
 
-// Şema hiyerarşisini dumper dosyasıyla %100 eşleştiren güvenli alt alanlar
+// Dumper dosyalarındaki tam yollar doğrudan eşitlendi
 namespace schema_offsets {
-    using namespace cs2_dumper::schemas::client_dll;
-    
-    // Sınıf içi değişkenlerin tam yolları
-    constexpr std::ptrdiff_t m_hPlayerPawn = CCSPlayerController::m_hPlayerPawn;
-    constexpr std::ptrdiff_t m_sSanitizedPlayerName = CCSPlayerController::m_sSanitizedPlayerName;
-    constexpr std::ptrdiff_t m_iHealth = C_BaseEntity::m_iHealth;
-    constexpr std::ptrdiff_t m_iTeamNum = C_BaseEntity::m_iTeamNum;
+    constexpr std::ptrdiff_t m_hPlayerPawn = ::cs2_dumper::schemas::client_dll::CCSPlayerController::m_hPlayerPawn;
+    constexpr std::ptrdiff_t m_sSanitizedPlayerName = ::cs2_dumper::schemas::client_dll::CCSPlayerController::m_sSanitizedPlayerName;
+    constexpr std::ptrdiff_t m_iHealth = ::cs2_dumper::schemas::client_dll::C_BaseEntity::m_iHealth;
+    constexpr std::ptrdiff_t m_iTeamNum = ::cs2_dumper::schemas::client_dll::C_BaseEntity::m_iTeamNum;
 }
 
 struct PlayerInfo {
@@ -31,6 +28,7 @@ struct PlayerInfo {
     std::string name;
 };
 
+// Güvenli bellek okuma şablonu
 template <typename T>
 T Read(uintptr_t address) {
     T value{};
@@ -38,12 +36,14 @@ T Read(uintptr_t address) {
     return value;
 }
 
+// String okuma (Bellek sınırı güvenli)
 std::string ReadString(uintptr_t address, size_t maxSize = 32) {
     char buffer[128] = { 0 };
     ReadProcessMemory(processHandle, reinterpret_cast<LPCVOID>(address), buffer, (std::min)(maxSize, sizeof(buffer) - 1), nullptr);
     return std::string(buffer);
 }
 
+// Process ID bulma fonksiyonu
 DWORD GetProcessId(const wchar_t* processName) {
     DWORD pid = 0;
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -62,6 +62,7 @@ DWORD GetProcessId(const wchar_t* processName) {
     return pid;
 }
 
+// Modül base adresini bulma fonksiyonu
 uintptr_t GetModuleBaseAddress(DWORD pid, const wchar_t* moduleName) {
     uintptr_t baseAddress = 0;
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
@@ -80,18 +81,22 @@ uintptr_t GetModuleBaseAddress(DWORD pid, const wchar_t* moduleName) {
     return baseAddress;
 }
 
+// Konsol başlangıç ayarları
 void SetupConsole() {
-    // HATA DÜZELTMESİ: SetConsoleTitle yerine doğrudan geniş karakter (W) fonksiyonu çağrıldı
-    SetConsoleTitleW(L"CS2 Radar v1.1 Optimized");
+    SetConsoleTitleW(L"CS2 Radar v1.2 Final");
     
+    // Yanıp sönen beyaz imleci gizle
     HANDLE consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
     CONSOLE_CURSOR_INFO cursorInfo;
     GetConsoleCursorInfo(consoleHandle, &cursorInfo);
     cursorInfo.bVisible = FALSE;
     SetConsoleCursorInfo(consoleHandle, &cursorInfo);
+    
+    // Konsol penceresinin boyutunu sabitle
     system("mode con: cols=65 lines=30");
 }
 
+// Verileri ekrana basan fonksiyon (Titreme, kayma ve hayalet satır engelli)
 void DisplayPlayers(const std::vector<PlayerInfo>& players, int localTeam) {
     COORD cursorPos = { 0, 0 };
     SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), cursorPos);
@@ -109,19 +114,20 @@ void DisplayPlayers(const std::vector<PlayerInfo>& players, int localTeam) {
             teamStr = (p.team == 2) ? "T-TAK" : "CT-TAK";
         }
         
-        std::cout << " [" << std::setw(2) << std::setfill('0') << p.index << "] | "
+        std::cout << " [" << std::right << std::setw(2) << std::setfill('0') << p.index << "] | "
                   << std::setfill(' ') << std::setw(5) << teamStr << "  | "
-                  << std::setw(3) << p.health << " HP | "
-                  << std::left << std::setw(25) << p.name << std::right << "\n";
+                  << std::right << std::setw(3) << p.health << " HP | "
+                  << std::left << std::setw(25) << p.name << "\n";
         printedLines++;
     }
     
+    // Hayalet Satır Temizliği
     for (int k = printedLines; k < 20; k++) {
         std::cout << "                                                               \n";
     }
     
     std::cout << "===============================================================\n";
-    std::cout << "Aktif Oyuncu Sayisi: " << std::setw(2) << players.size() << "                                \n";
+    std::cout << "Aktif Oyuncu Sayisi: " << std::right << std::setw(2) << players.size() << "                                \n";
 }
 
 int main() {
@@ -171,7 +177,7 @@ int main() {
             std::vector<PlayerInfo> currentPlayers;
             int localTeam = 0;
 
-            // Kendi takım bilgisini oku
+            // Kendi takım bilgisini oku (Source 2 maskesi: 0x1FFF)
             uint32_t localPawnHandle = Read<uint32_t>(localController + schema_offsets::m_hPlayerPawn);
             if (localPawnHandle) {
                 uint32_t localPawnIndex = localPawnHandle & 0x1FFF;
