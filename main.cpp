@@ -4,9 +4,9 @@
 #include <thread>
 #include <string>
 
-// Proje klasörüne yüklediğin güncel iki dosyayı dahil ediyoruz
+// Proje klasöründeki güncel dumper dosyalarını dahil ediyoruz
 #include "offsets.hpp"    // dwEntityList ve dwLocalPlayerController için
-#include "client_dll.hpp" // Şemalar (CBasePlayerController, C_BaseEntity vb.) için
+#include "client_dll.hpp" // Şemalar (CCSPlayerController, C_BaseEntity) için
 
 HANDLE processHandle = nullptr;
 
@@ -18,14 +18,14 @@ T Read(uintptr_t address) {
     return value;
 }
 
-// Oyuncu İsmi Okuyucu (UTF-8 Güvenli)
+// Oyuncu İsmi Okuyucu (UTF-8 ve Bellek Sınırı Güvenli)
 std::string ReadPlayerName(uintptr_t address) {
     char buffer[32] = { 0 };
     ReadProcessMemory(processHandle, reinterpret_cast<LPCVOID>(address), &buffer, sizeof(buffer) - 1, nullptr);
     return std::string(buffer);
 }
 
-// Ekranı kırpıştırmadan imleci sol üste sarma fonksiyonu
+// Ekranı kırpıştırmadan konsol imlecini sol üste sarma fonksiyonu
 void ResetCursor() {
     COORD cursorPosition{ 0, 0 };
     SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), cursorPosition);
@@ -60,7 +60,7 @@ uintptr_t GetModuleBaseAddress(DWORD pid, const wchar_t* moduleName) {
 }
 
 int main() {
-    SetConsoleTitleW(L"CS2 Otomatik Ofset Radar v3.0");
+    SetConsoleTitleW(L"CS2 Otomatik Ofset Radar v3.1");
     HideConsoleCursor(); // Başlangıçta imleci gizle
     
     std::cout << "[+] CS2 (cs2.exe) Bekleniyor..." << std::endl;
@@ -93,7 +93,7 @@ int main() {
     system("cls"); // İlk bağlantıda konsolu bir kez temizle
 
     while (true) {
-        // offsets.hpp içerisindeki tam hiyerarşik isim alanlarından ana adresleri okuyoruz
+        // offsets.hpp içerisinden ana adresleri okuyoruz
         uintptr_t entityList = Read<uintptr_t>(clientModule + cs2_dumper::offsets::client_dll::dwEntityList);
         uintptr_t localController = Read<uintptr_t>(clientModule + cs2_dumper::offsets::client_dll::dwLocalPlayerController);
         
@@ -102,7 +102,7 @@ int main() {
             continue;
         }
 
-        // client_dll.hpp -> CCSPlayerController altındaki m_hPlayerPawn okuması (0x80C)
+        // Yerel oyuncunun (bizim) Pawn bilgilerimizi ve Takım ID'mizi alıyoruz
         uint32_t localPawnHandle = Read<uint32_t>(localController + cs2_dumper::schemas::client_dll::CCSPlayerController::m_hPlayerPawn);
         uint32_t localPawnIndexFromHandle = localPawnHandle & 0x1FFF;
         
@@ -113,12 +113,11 @@ int main() {
         if (localEntry >= 0x10000 && localEntry <= 0x7FFFFFFEFFFF) {
             uintptr_t localPawn = Read<uintptr_t>(localEntry + (120 * (localPawnIndexFromHandle & 0x1FF)));
             if (localPawn >= 0x10000 && localPawn <= 0x7FFFFFFEFFFF) {
-                // client_dll.hpp -> C_BaseEntity altındaki m_iTeamNum okuması (0x3E3)
                 localTeam = Read<int>(localPawn + cs2_dumper::schemas::client_dll::C_BaseEntity::m_iTeamNum);
             }
         }
 
-        // Akıcı ve titremeyen ekran yenileme başlangıcı
+        // Titremeyi önleyen akıcı arayüz çizimi
         ResetCursor();
         std::cout << "====================================================" << std::endl;
         std::cout << " ID  | TAKIM | CAN    | OYUNCU ADI                  " << std::endl;
@@ -140,11 +139,11 @@ int main() {
             if (playerController < 0x10000 || playerController > 0x7FFFFFFEFFFF) continue;
             if (playerController == localController) continue;
 
-            // Katman 3: Güncel şema üzerinden Pawn Handle okuma
+            // Katman 3: Şema üzerinden Pawn Handle okuma
             uint32_t playerPawnHandle = Read<uint32_t>(playerController + cs2_dumper::schemas::client_dll::CCSPlayerController::m_hPlayerPawn);
             if (!playerPawnHandle) continue;
 
-            // Maskeleme mantığı
+            // Bit maskeleme ile gerçek index tespiti
             uint32_t pawnIndexFromHandle = playerPawnHandle & 0x1FFF;
 
             // Katman 4: İkinci liste girdisi (Pawn List Entry) hesabı
@@ -159,15 +158,25 @@ int main() {
             
             if (playerPawn < 0x10000 || playerPawn > 0x7FFFFFFEFFFF) continue;
 
-            // --- GÜVENLİ BÖLGE (Doğrulanmış Güncel Şemalar) ---
-            int health = Read<int>(playerPawn + cs2_dumper::schemas::client_dll::C_BaseEntity::m_iHealth); // 0x344
-            int team = Read<int>(playerPawn + cs2_dumper::schemas::client_dll::C_BaseEntity::m_iTeamNum);   // 0x3E3
-            
-            // Yüklediğin güncel client_dll.hpp içindeki m_sSanitizedPlayerName (0x760) alanından UTF-8 isim okuma
+            // --- GÜVENLİ BÖLGE (Şema Veri Okuması) ---
+            int health = Read<int>(playerPawn + cs2_dumper::schemas::client_dll::C_BaseEntity::m_iHealth);
+            int team = Read<int>(playerPawn + cs2_dumper::schemas::client_dll::C_BaseEntity::m_iTeamNum);   
             std::string name = ReadPlayerName(playerController + cs2_dumper::schemas::client_dll::CCSPlayerController::m_sSanitizedPlayerName);
 
-            if (health > 0 && health <= 100 && !name.empty()) {
-                std::string teamStr = (team == localTeam) ? "DOST " : "RAKIP";
+            // KRİTİK GÜNCELLEME: Canı olan, ismi boş olmayan VE sadece aktif olarak T (2) veya CT (3) takımında olanları listele
+            if (health > 0 && health <= 100 && (team == 2 || team == 3) && !name.empty()) {
+                
+                std::string teamStr = "RAKIP";
+                
+                // Eğer biz izleyici (1) veya menüde (0) değilsek dost/rakip analizini yap
+                if (localTeam == 2 || localTeam == 3) {
+                    teamStr = (team == localTeam) ? "DOST " : "RAKIP";
+                } else {
+                    // Biz izleyiciysek, oynayanların gerçek takım isimlerini göster
+                    teamStr = (team == 2) ? "T-TAK" : "CT-TAK";
+                }
+
+                // Sabit genişlikli düzgün hizalanmış terminal çıktısı
                 std::cout << " [" << (i < 10 ? "0" : "") << i << "] | " 
                           << teamStr << " | " 
                           << (health < 100 ? " " : "") << (health < 10 ? " " : "") << health << " HP | " 
@@ -176,7 +185,7 @@ int main() {
             }
         }
 
-        // Listeden çıkan/ölen oyuncuların alt satırlarda kalıntı bırakmaması için dinamik temizlik
+        // Listeden çıkanlar veya ölenlerin arkasında terminalde hayalet satırlar kalmaması için temizlik
         for (int k = activeCount; k < 32; k++) {
             std::cout << "                                                               \n";
         }
