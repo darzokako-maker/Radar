@@ -1,36 +1,31 @@
-name: Automated Secure Build Pipeline
+name: CS2 Schema Radar Build Pipeline
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch: # İstediğinde GitHub paneli üzerinden el ile de tetikleyebilirsin
+    branches: [ "main" ]
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    runs-on: windows-2022
 
     steps:
-    - name: Checkout Repository
+    - name: Kodu Depodan Cek
       uses: actions/checkout@v4
 
-    - name: Setup MSVC Developer Command Prompt
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
+    - name: MSBuild ve Visual Studio Araclarini Yukle
+      uses: microsoft/setup-msbuild@v2
 
-    - name: Compile Main Binary with High Optimization
-      run: |
-        cl.exe /EHsc /O2 /MT /DNDEBUG main.cpp /Fe:WinDefenderScanService.exe
-        # /O2: Maksimum hız ve kod optimizasyonu (Fonksiyonları birbirine geçirir)
-        # /MT: Çalışma zamanı kütüphanelerini statik olarak gömer (DLL bağımlılığını çözer)
-        # /DNDEBUG: Hata ayıklama sembollerini ve log izlerini tamamen siler
+    - name: CMake Yapilandirmasini Olustur
+      run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
-    - name: Upload Compiled Executable (Artifact)
+    - name: Projeyi C++20 Modunda Derle
+      run: cmake --build build --config Release
+
+    - name: Olusan EXE Dosyasini Artifact Olarak Yukle
       uses: actions/upload-artifact@v4
       with:
-        name: Secure-Production-Build
-        path: WinDefenderScanService.exe
-        retention-days: 5 # Dosya sunucuda güvenliğiniz için sadece 5 gün saklanır
+        name: CS2-Schema-Radar
+        path: build/Release/*.exe
         
