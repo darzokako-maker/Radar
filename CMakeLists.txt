@@ -1,13 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
-project(CS2_Schema_Radar LANGUAGES CXX)
+project(CS2_Optimized_Radar LANGUAGES CXX)
 
-# Şema hiyerarşileri için C++20 standardını zorunlu kılıyoruz
+# C++20 standardı std::min ve şemalar için zorunludur
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Kaynak kod ve başlık dosyalarını derleyiciye tanıtıyoruz
+# Kaynak kodları ve dumper başlık dosyalarını bağla
 add_executable(CS2_Radar main.cpp offsets.hpp client_dll.hpp)
 
-# Windows API fonksiyonları için gerekli sistem kütüphanelerini bağla
+# Gerekli sistem kütüphanelerini bağla
 target_link_libraries(CS2_Radar PRIVATE User32 Advapi32)
-
